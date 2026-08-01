@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trading Bot Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #12161f;
+    --border: #232838;
+    --text: #e6e9ef;
+    --muted: #7c8494;
+    --green: #26a69a;
+    --red: #ef5350;
+    --accent: #4f8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .status-pill {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+  .status-pill.running { color: var(--green); border-color: var(--green); }
+  .status-pill.stopped { color: var(--muted); }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  input, select, button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  button {
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  button.danger { background: var(--red); border-color: var(--red); color: white; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 0;
+  }
+  .sidebar {
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    min-height: calc(100vh - 110px);
+  }
+  .sidebar h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 12px 0; }
+
+  .watchlist-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+  .watchlist-row:hover { background: var(--panel); }
+  .watchlist-row.active { background: var(--panel); border: 1px solid var(--accent); }
+  .watchlist-row .sym { font-weight: 600; font-size: 14px; }
+  .watchlist-row .price { font-size: 12px; color: var(--muted); }
+  .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+  .badge.BUY { background: rgba(38,166,154,0.2); color: var(--green); }
+  .badge.SELL { background: rgba(239,83,80,0.2); color: var(--red); }
+  .badge.HOLD { background: rgba(124,132,148,0.2); color: var(--muted); }
+
+  .main { padding: 16px 24px; }
+  .metrics {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 16px;
+  }
+  .metric { }
+  .metric .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .metric .value { font-size: 20px; font-weight: 700; }
+
+  #chart { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px; border-bottom: 1px solid var(--border); }
+  td.BUY { color: var(--green); }
+  td.SELL { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📈 Trading Bot Dashboard</h1>
+  <span id="statusPill" class="status-pill stopped">Stopped</span>
+</header>
+
+<div class="controls">
+  <input id="symbolsInput" placeholder="SBIFUNDS,RELIANCE,TCS (blank = default watchlist)" style="width: 320px;">
+  <input id="tickSeconds" type="number" step="0.1" value="0.5" style="width: 70px;" title="tick seconds">
+  <button class="primary" id="startBtn">Start Bot</button>
+  <button class="danger" id="stopBtn">Stop Bot</button>
+  <span style="color: var(--muted); font-size: 12px; margin-left: 12px;">API: <span id="apiBase"></span></span>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <h2>Watchlist &amp; Screener</h2>
+    <div id="watchlist">
+      <p style="color: var(--muted); font-size: 13px;">Start the bot to populate the watchlist.</p>
+    </div>
+
+    <h2 style="margin-top: 24px;">Research (Wider Universe)</h2>
+    <button id="discoverBtn" style="width: 100%; margin-bottom: 10px;">Scan 20 NSE Stocks</button>
+    <p style="color: var(--muted); font-size: 11px; margin-top: -4px;">Informational only, not investment advice.</p>
+    <div id="discoverResults"></div>
+  </div>
+
+  <div class="main">
+    <div class="metrics">
+      <div class="metric"><div class="label">Selected</div><div class="value" id="selectedSymbol">—</div></div>
+      <div class="metric"><div class="label">Cash</div><div class="value" id="cashVal">—</div></div>
+      <div class="metric"><div class="label">Portfolio Value</div><div class="value" id="portfolioVal">—</div></div>
+    </div>
+    <div id="chart"></div>
+
+    <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">Trade Log</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Cash After</th></tr></thead>
+      <tbody id="tradesBody"><tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+document.getElementById('apiBase').textContent = API;
+
+let chart, candleSeries;
+let selectedSymbol = null;
+let pollTimer = null;
+
+function initChart() {
+  const el = document.getElementById('chart');
+  chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth,
+    height: 420,
+    layout: { background: { color: '#12161f' }, textColor: '#e6e9ef' },
+    grid: { vertLines: { color: '#232838' }, horzLines: { color: '#232838' } },
+    timeScale: { timeVisible: true, secondsVisible: true },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  });
+  window.addEventListener('resize', () => chart.applyOptions({ width: el.clientWidth }));
+}
+
+async function startBot() {
+  const symbols = document.getElementById('symbolsInput').value.trim();
+  const tick = document.getElementById('tickSeconds').value || 2;
+  const params = new URLSearchParams({ tick_seconds: tick });
+  if (symbols) params.set('symbols', symbols);
+  const res = await fetch(`${API}/api/bot/start?${params}`, { method: 'POST' });
+  const data = await res.json();
+  if (data.status) {
+    startPolling();
+  } else {
+    alert('Start failed: ' + (data.reason || 'unknown'));
+  }
+}
+
+async function stopBot() {
+  await fetch(`${API}/api/bot/stop`, { method: 'POST' });
+  stopPolling();
+  document.getElementById('statusPill').textContent = 'Stopped';
+  document.getElementById('statusPill').className = 'status-pill stopped';
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refreshAll, 1500);
+  refreshAll();
+}
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+}
+
+async function refreshAll() {
+  const statusRes = await fetch(`${API}/api/bot/status`);
+  const status = await statusRes.json();
+
+  const pill = document.getElementById('statusPill');
+  if (status.running) {
+    pill.textContent = 'Running';
+    pill.className = 'status-pill running';
+    document.getElementById('cashVal').textContent = '₹' + Number(status.cash).toLocaleString('en-IN', {maximumFractionDigits: 2});
+    document.getElementById('portfolioVal').textContent = '₹' + Number(status.portfolio_value).toLocaleString('en-IN', {maximumFractionDigits: 2});
+    if (!selectedSymbol && status.symbols && status.symbols.length) {
+      selectedSymbol = status.symbols[0];
+    }
+  } else {
+    pill.textContent = 'Stopped';
+    pill.className = 'status-pill stopped';
+  }
+
+  const screenerRes = await fetch(`${API}/api/watchlist/screener`);
+  const screener = await screenerRes.json();
+  renderWatchlist(screener.results || []);
+
+  if (selectedSymbol) {
+    document.getElementById('selectedSymbol').textContent = selectedSymbol;
+    const candlesRes = await fetch(`${API}/api/prices/${selectedSymbol}/candles?interval_seconds=3&limit=200`);
+    const candles = await candlesRes.json();
+    if (candles.length) candleSeries.setData(candles);
+  }
+
+  const tradesRes = await fetch(`${API}/api/trades?limit=25`);
+  const trades = await tradesRes.json();
+  renderTrades(trades);
+}
+
+function renderWatchlist(results) {
+  const el = document.getElementById('watchlist');
+  if (!results.length) {
+    el.innerHTML = '<p style="color: var(--muted); font-size: 13px;">No data yet.</p>';
+    return;
+  }
+  el.innerHTML = results.map(r => `
+    <div class="watchlist-row ${r.symbol === selectedSymbol ? 'active' : ''}" onclick="selectSymbol('${r.symbol}')">
+      <div>
+        <div class="sym">${r.symbol}</div>
+        <div class="price">₹${r.last_price ?? '—'} &nbsp; ${r.momentum_pct >= 0 ? '+' : ''}${r.momentum_pct}%</div>
+      </div>
+      <span class="badge ${r.signal}">${r.signal}</span>
+    </div>
+  `).join('');
+}
+
+function selectSymbol(sym) {
+  selectedSymbol = sym;
+  refreshAll();
+}
+window.selectSymbol = selectSymbol;
+
+function renderTrades(trades) {
+  const body = document.getElementById('tradesBody');
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = trades.map(t => `
+    <tr>
+      <td>${new Date(t.timestamp).toLocaleTimeString()}</td>
+      <td>${t.symbol}</td>
+      <td class="${t.side}">${t.side}</td>
+      <td>${t.qty}</td>
+      <td>₹${t.price}</td>
+      <td>₹${Number(t.cash_after).toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('startBtn').addEventListener('click', startBot);
+document.getElementById('stopBtn').addEventListener('click', stopBot);
+
+async function runDiscover() {
+  const btn = document.getElementById('discoverBtn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+  try {
+    const res = await fetch(`${API}/api/discover?limit=10`);
+    if (!res.ok) throw new Error('Server error: ' + res.status);
+    const data = await res.json();
+    renderDiscover(data.candidates || []);
+  } catch (err) {
+    document.getElementById('discoverResults').innerHTML =
+      `<p style="color: var(--red); font-size: 12px;">Scan failed: ${err.message}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Scan 20 NSE Stocks';
+  }
+}
+
+function renderDiscover(candidates) {
+  const el = document.getElementById('discoverResults');
+  if (!candidates.length) {
+    el.innerHTML = '<p style="color: var(--muted); font-size: 12px;">No data (check internet connection).</p>';
+    return;
+  }
+  el.innerHTML = candidates.map(c => `
+    <div class="watchlist-row" style="cursor: default;">
+      <div>
+        <div class="sym">${c.symbol}</div>
+        <div class="price">₹${c.last_price} &nbsp; 3mo: ${c.momentum_3m_pct >= 0 ? '+' : ''}${c.momentum_3m_pct}% ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
+      </div>
+      <span class="badge HOLD">${c.research_score}</span>
+    </div>
+  `).join('');
+}
+
+document.getElementById('discoverBtn').addEventListener('click', runDiscover);
+
+initChart();
+refreshAll();
+</script>
+
+</body>
+</html>

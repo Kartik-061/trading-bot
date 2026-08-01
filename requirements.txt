@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.35
+pydantic==2.9.2
+python-dotenv==1.0.1
+smartapi-python==1.4.8
+pyotp==2.9.0
+pandas==2.2.2
+requests==2.32.3
+yfinance>=0.2.40

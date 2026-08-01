@@ -1,0 +1,156 @@
+"""
+app/api/routes.py
+REST endpoints, same shape as BookIQ's DRF views: thin controllers,
+real logic lives in bot_runner / backtest / broker modules.
+"""
+from typing import Optional
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
+
+from app.database import get_db
+from app.models import Trade, BotSession, PriceTick
+from app.bot_runner import bot_runner
+from app.backtest.engine import run_backtest
+from app.strategies import STRATEGY_REGISTRY
+from app.data_feed.feeds import SimulatedFeed
+from app.screener.candidates import scan_universe, NIFTY_UNIVERSE
+
+router = APIRouter()
+
+
+@router.post("/bot/start")
+def start_bot(symbols: Optional[str] = None, strategy: str = "ema_rsi", tick_seconds: float = 2):
+    """symbols: comma-separated, e.g. 'SBIFUNDS,RELIANCE,TCS'. Omit to use the default watchlist."""
+    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
+    return bot_runner.start(symbols=symbol_list, strategy_name=strategy, tick_seconds=tick_seconds)
+
+
+@router.get("/watchlist/screener")
+def screener():
+    """Ranks the watchlist by recent momentum + current signal. Honest 'best stock' finder -
+    not a prediction, just which symbols are moving and what the strategy currently says."""
+    return bot_runner.screener()
+
+
+@router.get("/prices/{symbol}/candles")
+def get_candles(symbol: str, interval_seconds: int = 5, limit: int = 100, db: Session = Depends(get_db)):
+    """Aggregates raw price ticks into OHLC candles for charting."""
+    ticks = (
+        db.query(PriceTick)
+        .filter(PriceTick.symbol == symbol.upper())
+        .order_by(PriceTick.timestamp)
+        .all()
+    )
+    if not ticks:
+        return []
+
+    candles = []
+    bucket = []
+    bucket_start = ticks[0].timestamp
+
+    def flush(bucket, bucket_start):
+        if not bucket:
+            return None
+        prices = [t.price for t in bucket]
+        return {
+            "time": int(bucket_start.timestamp()),
+            "open": prices[0],
+            "high": max(prices),
+            "low": min(prices),
+            "close": prices[-1],
+        }
+
+    for t in ticks:
+        if (t.timestamp - bucket_start).total_seconds() >= interval_seconds and bucket:
+            candles.append(flush(bucket, bucket_start))
+            bucket = []
+            bucket_start = t.timestamp
+        bucket.append(t)
+
+    last = flush(bucket, bucket_start)
+    if last:
+        candles.append(last)
+
+    return candles[-limit:]
+
+
+@router.post("/bot/stop")
+def stop_bot():
+    return bot_runner.stop()
+
+
+@router.get("/bot/status")
+def bot_status():
+    return bot_runner.status()
+
+
+@router.get("/trades")
+def list_trades(limit: int = 50, db: Session = Depends(get_db)):
+    trades = db.query(Trade).order_by(desc(Trade.timestamp)).limit(limit).all()
+    return [
+        {
+            "id": t.id, "timestamp": t.timestamp.isoformat(), "symbol": t.symbol,
+            "side": t.side, "qty": t.qty, "price": t.price, "value": t.value,
+            "cash_after": t.cash_after, "is_live": t.is_live, "strategy": t.strategy_name,
+        }
+        for t in trades
+    ]
+
+
+@router.get("/sessions")
+def list_sessions(db: Session = Depends(get_db)):
+    sessions = db.query(BotSession).order_by(desc(BotSession.started_at)).all()
+    return [
+        {
+            "id": s.id, "started_at": s.started_at.isoformat(),
+            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "symbol": s.symbol, "strategy": s.strategy_name,
+            "starting_capital": s.starting_capital, "final_value": s.final_value,
+            "is_live": s.is_live, "status": s.status,
+        }
+        for s in sessions
+    ]
+
+@router.get("/discover")
+def discover(limit: int = 10):
+    """
+    Scans a wider universe of NSE stocks for research purposes: real momentum
+    and valuation data, ranked transparently. NOT investment advice, NOT a
+    prediction of future returns - a starting point for your own judgment.
+    """
+    results = scan_universe()
+    return {
+        "disclaimer": "Informational research data only, not investment advice. "
+                       "Past momentum and valuation do not guarantee future returns.",
+        "candidates": results[:limit],
+    }
+
+@router.post("/backtest")
+def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
+             starting_price: float = 598.0, num_ticks: int = 500,
+             starting_capital: float = 100000):
+    """
+    Runs a strategy over simulated historical data as a placeholder.
+    Swap the price generation here for real historical candles from
+    Angel One's historical data API once you're ready to test on real data -
+    that's the next real milestone, not this endpoint's job to fake.
+    """
+    strategy_cls = STRATEGY_REGISTRY.get(strategy)
+    if strategy_cls is None:
+        return {"status": False, "reason": f"unknown_strategy: {strategy}"}
+
+    feed = SimulatedFeed({symbol: starting_price})
+    prices = [feed.get_price(symbol) for _ in range(num_ticks)]
+
+    result = run_backtest(strategy_cls(), prices, starting_capital=starting_capital)
+    return {
+        "strategy": strategy,
+        "starting_capital": result.starting_capital,
+        "final_value": result.final_value,
+        "total_return_pct": result.total_return_pct,
+        "total_trades": result.total_trades,
+        "win_rate_pct": result.win_rate,
+        "max_drawdown_pct": result.max_drawdown_pct,
+        "note": "Backtested on simulated data - run against real historical candles before trusting these numbers.",
+    }
