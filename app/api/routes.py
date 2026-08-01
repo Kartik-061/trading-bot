@@ -15,8 +15,9 @@ from app.backtest.engine import run_backtest
 from app.strategies import STRATEGY_REGISTRY
 from app.data_feed.feeds import SimulatedFeed
 from app.screener.candidates import scan_universe, NIFTY_UNIVERSE
-from app.backtest.historical_data import fetch_historical_closes
-
+from app.screener.long_term import scan_long_term, PERIOD_WINDOWS_TRADING_DAYS
+from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv
+from app.backtest.portfolio_stats import test_significance
 router = APIRouter()
 
 
@@ -153,6 +154,7 @@ def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
         "total_trades": result.total_trades,
         "win_rate_pct": result.win_rate,
         "max_drawdown_pct": result.max_drawdown_pct,
+        "total_costs_rs": result.total_costs,
         "note": "Backtested on simulated data - run against real historical candles before trusting these numbers.",
     }
 @router.post("/backtest/historical")
@@ -186,6 +188,7 @@ def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
         "total_trades": result.total_trades,
         "win_rate_pct": result.win_rate,
         "max_drawdown_pct": result.max_drawdown_pct,
+        "total_costs_rs": result.total_costs,
         "note": "Tested on real historical price data.",
     }
 @router.post("/backtest/batch")
@@ -204,8 +207,18 @@ def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
         {"name": "ema_rsi_default", "cls": STRATEGY_REGISTRY["ema_rsi"], "kwargs": {}},
         {"name": "ema_rsi_fast", "cls": STRATEGY_REGISTRY["ema_rsi"], "kwargs": {"ema_short": 5, "ema_long": 13}},
         {"name": "mean_reversion_default", "cls": STRATEGY_REGISTRY["mean_reversion"], "kwargs": {}},
-        {"name": "mean_reversion_tight", "cls": STRATEGY_REGISTRY["mean_reversion"],
+        {"name": "mean_reversion_tight_rsi", "cls": STRATEGY_REGISTRY["mean_reversion"],
          "kwargs": {"oversold": 35, "overbought": 65}},
+        {"name": "mean_reversion_tight_stop", "cls": STRATEGY_REGISTRY["mean_reversion"],
+         "kwargs": {"stop_loss_pct": 1.0}},
+        {"name": "mean_reversion_fast_exit", "cls": STRATEGY_REGISTRY["mean_reversion"],
+         "kwargs": {"stop_loss_pct": 1.0, "take_profit_rsi": 45}},
+        # Swing-timeframe variants - much wider stop so normal daily noise
+        # doesn't trigger a false exit. Use these with interval="1d".
+        {"name": "ema_rsi_swing", "cls": STRATEGY_REGISTRY["ema_rsi"],
+         "kwargs": {"ema_short": 20, "ema_long": 50}},
+        {"name": "mean_reversion_swing", "cls": STRATEGY_REGISTRY["mean_reversion"],
+         "kwargs": {"stop_loss_pct": 6.0, "take_profit_rsi": 60}},
     ]
 
     results = []
@@ -227,10 +240,77 @@ def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
                 "total_trades": result.total_trades,
                 "win_rate_pct": result.win_rate,
                 "max_drawdown_pct": result.max_drawdown_pct,
+                "total_costs_rs": result.total_costs,
             })
 
     results.sort(key=lambda r: r.get("total_return_pct", -9999), reverse=True)
     return {
         "note": "Grid backtest: multiple strategy variants x multiple symbols, on real historical data.",
         "results": results,
+    }
+
+@router.post("/backtest/significance")
+def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
+                           interval: str = "5m", period: str = "60d",
+                           starting_capital: float = 100000,
+                           ema_short: int = None, ema_long: int = None,
+                           oversold: int = None, overbought: int = None,
+                           stop_loss_pct: float = None, take_profit_rsi: int = None,
+                           volume_multiplier: float = None):
+    """
+    The rigorous version of 'does this strategy work' - pools every trade's
+    P&L across every symbol given and tests whether the average trade result
+    is statistically distinguishable from zero.
+    """
+    strategy_cls = STRATEGY_REGISTRY.get(strategy)
+    if strategy_cls is None:
+        return {"status": False, "reason": f"unknown_strategy: {strategy}"}
+
+    kwargs = {}
+    for name, val in [("ema_short", ema_short), ("ema_long", ema_long),
+                      ("oversold", oversold), ("overbought", overbought),
+                      ("stop_loss_pct", stop_loss_pct), ("take_profit_rsi", take_profit_rsi),
+                      ("volume_multiplier", volume_multiplier)]:
+        if val is not None:
+            kwargs[name] = val
+
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    symbol_data = {}
+
+    for symbol in symbol_list:
+        try:
+            if strategy == "volume_confirmed":
+                symbol_data[symbol] = fetch_historical_ohlcv(symbol, interval=interval, period=period)
+            else:
+                symbol_data[symbol] = fetch_historical_closes(symbol, interval=interval, period=period)
+        except ValueError:
+            continue
+
+    if not symbol_data:
+        return {"status": False, "reason": "No data fetched for any symbol."}
+
+    result = test_significance(strategy_cls, kwargs, symbol_data, starting_capital=starting_capital)
+    result["strategy"] = strategy
+    result["strategy_kwargs"] = kwargs
+    return result
+@router.get("/discover/long-term")
+def discover_long_term(rank_by: str = "1y", limit: int = 15):
+    """
+    Ranks a wide universe of NSE stocks (large + mid cap, 42 names) by
+    trailing return over the chosen holding period. Purely backward-looking
+    historical data - NOT a prediction of future performance.
+
+    rank_by: '3mo', '6mo', '1y', or '2y'
+    """
+    if rank_by not in PERIOD_WINDOWS_TRADING_DAYS:
+        return {"status": False,
+                "reason": f"rank_by must be one of {list(PERIOD_WINDOWS_TRADING_DAYS.keys())}"}
+
+    results = scan_long_term(rank_by=rank_by)
+    return {
+        "disclaimer": "Backward-looking historical performance only. Past returns over "
+                       "any period do not predict future returns. Not investment advice - "
+                       "use this to narrow down names worth your own research.",
+        "ranked_by": rank_by,
+        "candidates": results[:limit],
     }

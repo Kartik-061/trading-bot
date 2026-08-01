@@ -34,3 +34,23 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
         )
 
     return [round(float(p), 2) for p in hist["Close"].tolist()]
+
+def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d") -> list:
+    """
+    Returns a list of {"close": float, "volume": float} dicts, oldest first -
+    what volume-aware strategies need. run_backtest() in engine.py accepts
+    either this format or the plain float list from fetch_historical_closes.
+    """
+    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+    hist = ticker.history(interval=interval, period=period)
+
+    if hist.empty:
+        raise ValueError(
+            f"No historical data returned for {symbol} at interval={interval}, period={period}. "
+            f"Check the symbol is correct and actively traded."
+        )
+
+    return [
+        {"close": round(float(row["Close"]), 2), "volume": float(row["Volume"])}
+        for _, row in hist.iterrows()
+    ]

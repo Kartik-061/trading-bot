@@ -11,8 +11,10 @@ class BaseStrategy(ABC):
     name = "base"
 
     @abstractmethod
-    def decide(self, price: float, holding_qty: int) -> str:
-        """Return 'BUY', 'SELL', or 'HOLD'. Called once per new candle/tick."""
+    def decide(self, price: float, holding_qty: int, volume: float = None) -> str:
+        """Return 'BUY', 'SELL', or 'HOLD'. Called once per new candle/tick.
+        volume is optional - price-only strategies ignore it, volume-aware
+        strategies use it for confirmation."""
         raise NotImplementedError
 
     def reset(self):

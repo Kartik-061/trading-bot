@@ -52,7 +52,7 @@ class EmaRsiStrategy(BaseStrategy):
         self.prices.clear()
         self.prev_relation = None
 
-    def decide(self, price: float, holding_qty: int) -> str:
+    def decide(self, price: float, holding_qty: int, volume: float = None) -> str:
         self.prices.append(price)
         prices_list = list(self.prices)
 

@@ -154,6 +154,34 @@
       <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Cash After</th></tr></thead>
       <tbody id="tradesBody"><tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr></tbody>
     </table>
+
+    <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">
+      Long-Term Screener (Large + Mid Cap)
+    </h2>
+    <p style="color: var(--muted); font-size: 11px; margin: -4px 0 10px 0;">
+      Backward-looking historical performance only. Not investment advice.
+    </p>
+    <div class="controls" style="padding: 0 0 12px 0; border-bottom: none;">
+      <select id="rankByPeriod">
+        <option value="3mo">Rank by 3mo</option>
+        <option value="6mo">Rank by 6mo</option>
+        <option value="1y" selected>Rank by 1y</option>
+        <option value="2y">Rank by 2y</option>
+      </select>
+      <button class="primary" id="scanLongTermBtn">Scan Long-Term Universe</button>
+      <span id="longTermStatus" style="color: var(--muted); font-size: 12px;"></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Price</th><th>3mo</th><th>6mo</th><th>1y</th><th>2y</th>
+          <th>P/E</th><th>Sector</th><th>Consistency</th>
+        </tr>
+      </thead>
+      <tbody id="longTermBody">
+        <tr><td colspan="9" style="color: var(--muted);">Click "Scan Long-Term Universe" to load.</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -294,18 +322,11 @@ async function runDiscover() {
   const btn = document.getElementById('discoverBtn');
   btn.disabled = true;
   btn.textContent = 'Scanning...';
-  try {
-    const res = await fetch(`${API}/api/discover?limit=10`);
-    if (!res.ok) throw new Error('Server error: ' + res.status);
-    const data = await res.json();
-    renderDiscover(data.candidates || []);
-  } catch (err) {
-    document.getElementById('discoverResults').innerHTML =
-      `<p style="color: var(--red); font-size: 12px;">Scan failed: ${err.message}</p>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Scan 20 NSE Stocks';
-  }
+  const res = await fetch(`${API}/api/discover?limit=10`);
+  const data = await res.json();
+  renderDiscover(data.candidates || []);
+  btn.disabled = false;
+  btn.textContent = 'Scan 20 NSE Stocks';
 }
 
 function renderDiscover(candidates) {
@@ -318,7 +339,7 @@ function renderDiscover(candidates) {
     <div class="watchlist-row" style="cursor: default;">
       <div>
         <div class="sym">${c.symbol}</div>
-        <div class="price">₹${c.last_price ?? 'N/A'} &nbsp; 3mo: ${c.momentum_3m_pct != null ? (c.momentum_3m_pct >= 0 ? '+' : '') + c.momentum_3m_pct + '%' : 'N/A'} ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
+        <div class="price">₹${c.last_price} &nbsp; 3mo: ${c.momentum_3m_pct >= 0 ? '+' : ''}${c.momentum_3m_pct}% ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
       </div>
       <span class="badge HOLD">${c.research_score}</span>
     </div>
@@ -326,6 +347,75 @@ function renderDiscover(candidates) {
 }
 
 document.getElementById('discoverBtn').addEventListener('click', runDiscover);
+
+async function runLongTermScan() {
+  const btn = document.getElementById('scanLongTermBtn');
+  const status = document.getElementById('longTermStatus');
+  const rankBy = document.getElementById('rankByPeriod').value;
+
+  btn.disabled = true;
+  btn.textContent = 'Scanning 42 stocks...';
+  status.textContent = 'This can take 20-30s (real 2-year history per stock).';
+
+  try {
+    const res = await fetch(`${API}/api/discover/long-term?rank_by=${rankBy}&limit=42`);
+    if (!res.ok) throw new Error('Server error: ' + res.status);
+    const data = await res.json();
+    renderLongTerm(data.candidates || []);
+    status.textContent = `${(data.candidates || []).length} stocks, ranked by ${rankBy}.`;
+  } catch (err) {
+    document.getElementById('longTermBody').innerHTML =
+      `<tr><td colspan="9" style="color: var(--red);">Scan failed: ${err.message}</td></tr>`;
+    status.textContent = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Scan Long-Term Universe';
+  }
+}
+
+function pctCell(val) {
+  if (val === null || val === undefined) return '<td style="color: var(--muted);">N/A</td>';
+  const color = val > 0 ? 'var(--green)' : (val < 0 ? 'var(--red)' : 'var(--muted)');
+  const sign = val > 0 ? '+' : '';
+  return `<td style="color: ${color};">${sign}${val}%</td>`;
+}
+
+function renderLongTerm(candidates) {
+  const body = document.getElementById('longTermBody');
+  if (!candidates.length) {
+    body.innerHTML = '<tr><td colspan="9" style="color: var(--muted);">No data (check internet connection).</td></tr>';
+    return;
+  }
+
+  body.innerHTML = candidates.map(c => {
+    const r = c.returns_pct || {};
+    const periods = ['3mo', '6mo', '1y', '2y'];
+    const values = periods.map(p => r[p]).filter(v => v !== null && v !== undefined);
+    const allPositive = values.length === 4 && values.every(v => v > 0);
+    const allNegative = values.length === 4 && values.every(v => v < 0);
+
+    let consistency = '<span class="badge HOLD">Mixed</span>';
+    if (allPositive) consistency = '<span class="badge BUY">Consistent Up</span>';
+    if (allNegative) consistency = '<span class="badge SELL">Consistent Down</span>';
+
+    return `
+      <tr>
+        <td style="font-weight: 600;">${c.symbol}</td>
+        <td>₹${c.last_price ?? 'N/A'}</td>
+        ${pctCell(r['3mo'])}
+        ${pctCell(r['6mo'])}
+        ${pctCell(r['1y'])}
+        ${pctCell(r['2y'])}
+        <td>${c.pe_ratio ? c.pe_ratio.toFixed(1) : 'N/A'}</td>
+        <td style="color: var(--muted); font-size: 12px;">${c.sector ?? 'N/A'}</td>
+        <td>${consistency}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+document.getElementById('scanLongTermBtn').addEventListener('click', runLongTermScan);
+document.getElementById('rankByPeriod').addEventListener('change', runLongTermScan);
 
 initChart();
 refreshAll();
