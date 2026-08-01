@@ -318,7 +318,7 @@ function renderDiscover(candidates) {
     <div class="watchlist-row" style="cursor: default;">
       <div>
         <div class="sym">${c.symbol}</div>
-        <div class="price">₹${c.last_price} &nbsp; 3mo: ${c.momentum_3m_pct >= 0 ? '+' : ''}${c.momentum_3m_pct}% ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
+        <div class="price">₹${c.last_price ?? 'N/A'} &nbsp; 3mo: ${c.momentum_3m_pct != null ? (c.momentum_3m_pct >= 0 ? '+' : '') + c.momentum_3m_pct + '%' : 'N/A'} ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
       </div>
       <span class="badge HOLD">${c.research_score}</span>
     </div>

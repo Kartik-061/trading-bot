@@ -15,6 +15,7 @@ from app.backtest.engine import run_backtest
 from app.strategies import STRATEGY_REGISTRY
 from app.data_feed.feeds import SimulatedFeed
 from app.screener.candidates import scan_universe, NIFTY_UNIVERSE
+from app.backtest.historical_data import fetch_historical_closes
 
 router = APIRouter()
 
@@ -153,4 +154,83 @@ def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
         "win_rate_pct": result.win_rate,
         "max_drawdown_pct": result.max_drawdown_pct,
         "note": "Backtested on simulated data - run against real historical candles before trusting these numbers.",
+    }
+@router.post("/backtest/historical")
+def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
+                         interval: str = "5m", period: str = "60d",
+                         starting_capital: float = 100000):
+    """
+    Runs a strategy over REAL historical price data from Yahoo Finance.
+    This is the honest test - simulated backtest tells you the code works,
+    this one tells you whether the strategy has any actual edge.
+    """
+    strategy_cls = STRATEGY_REGISTRY.get(strategy)
+    if strategy_cls is None:
+        return {"status": False, "reason": f"unknown_strategy: {strategy}"}
+
+    try:
+        prices = fetch_historical_closes(symbol, interval=interval, period=period)
+    except ValueError as e:
+        return {"status": False, "reason": str(e)}
+
+    result = run_backtest(strategy_cls(), prices, starting_capital=starting_capital)
+    return {
+        "strategy": strategy,
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "period": period,
+        "num_candles": len(prices),
+        "starting_capital": result.starting_capital,
+        "final_value": result.final_value,
+        "total_return_pct": result.total_return_pct,
+        "total_trades": result.total_trades,
+        "win_rate_pct": result.win_rate,
+        "max_drawdown_pct": result.max_drawdown_pct,
+        "note": "Tested on real historical price data.",
+    }
+@router.post("/backtest/batch")
+def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
+                    interval: str = "5m", period: str = "60d",
+                    starting_capital: float = 100000):
+    """
+    Runs several strategy variants across every symbol given, on real
+    historical data. One flat result on one stock proves little - this
+    grid is what actually tells you whether there's a pattern (e.g.
+    "mean reversion works on volatile small-caps but not on RELIANCE").
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+
+    variants = [
+        {"name": "ema_rsi_default", "cls": STRATEGY_REGISTRY["ema_rsi"], "kwargs": {}},
+        {"name": "ema_rsi_fast", "cls": STRATEGY_REGISTRY["ema_rsi"], "kwargs": {"ema_short": 5, "ema_long": 13}},
+        {"name": "mean_reversion_default", "cls": STRATEGY_REGISTRY["mean_reversion"], "kwargs": {}},
+        {"name": "mean_reversion_tight", "cls": STRATEGY_REGISTRY["mean_reversion"],
+         "kwargs": {"oversold": 35, "overbought": 65}},
+    ]
+
+    results = []
+    for symbol in symbol_list:
+        try:
+            prices = fetch_historical_closes(symbol, interval=interval, period=period)
+        except ValueError as e:
+            results.append({"symbol": symbol, "error": str(e)})
+            continue
+
+        for variant in variants:
+            strategy = variant["cls"](**variant["kwargs"])
+            result = run_backtest(strategy, prices, starting_capital=starting_capital)
+            results.append({
+                "symbol": symbol,
+                "strategy_variant": variant["name"],
+                "num_candles": len(prices),
+                "total_return_pct": result.total_return_pct,
+                "total_trades": result.total_trades,
+                "win_rate_pct": result.win_rate,
+                "max_drawdown_pct": result.max_drawdown_pct,
+            })
+
+    results.sort(key=lambda r: r.get("total_return_pct", -9999), reverse=True)
+    return {
+        "note": "Grid backtest: multiple strategy variants x multiple symbols, on real historical data.",
+        "results": results,
     }
