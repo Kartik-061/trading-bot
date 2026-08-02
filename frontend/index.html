@@ -16,75 +16,38 @@
     --accent: #4f8cff;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
-  }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); }
   header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-  .status-pill {
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 12px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-  }
+  .status-pill { font-size: 12px; padding: 4px 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
   .status-pill.running { color: var(--green); border-color: var(--green); }
   .status-pill.stopped { color: var(--muted); }
 
-  .controls {
-    display: flex;
-    gap: 10px;
-    padding: 12px 24px;
-    border-bottom: 1px solid var(--border);
-    align-items: center;
-    flex-wrap: wrap;
+  .tabs { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .tab-btn {
+    background: none; border: none; color: var(--muted); padding: 12px 18px; font-size: 13px;
+    font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent;
   }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .controls { display: flex; gap: 10px; padding: 12px 24px; border-bottom: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
   input, select, button {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 12px;
-    border-radius: 6px;
-    font-size: 13px;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 7px 12px; border-radius: 6px; font-size: 13px;
   }
-  button {
-    cursor: pointer;
-    font-weight: 600;
-  }
+  button { cursor: pointer; font-weight: 600; }
   button.primary { background: var(--accent); border-color: var(--accent); color: white; }
   button.danger { background: var(--red); border-color: var(--red); color: white; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .layout {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    gap: 0;
-  }
-  .sidebar {
-    border-right: 1px solid var(--border);
-    padding: 16px;
-    min-height: calc(100vh - 110px);
-  }
+  .layout { display: grid; grid-template-columns: 300px 1fr; }
+  .sidebar { border-right: 1px solid var(--border); padding: 16px; min-height: calc(100vh - 160px); }
   .sidebar h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 12px 0; }
 
-  .watchlist-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 8px;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-bottom: 4px;
-  }
+  .watchlist-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
   .watchlist-row:hover { background: var(--panel); }
   .watchlist-row.active { background: var(--panel); border: 1px solid var(--accent); }
   .watchlist-row .sym { font-weight: 600; font-size: 14px; }
@@ -95,39 +58,31 @@
   .badge.HOLD { background: rgba(124,132,148,0.2); color: var(--muted); }
 
   .main { padding: 16px 24px; }
-  .metrics {
-    display: flex;
-    gap: 24px;
-    margin-bottom: 16px;
-  }
-  .metric { }
+  .metrics { display: flex; gap: 24px; margin-bottom: 16px; }
   .metric .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
   .metric .value { font-size: 20px; font-weight: 700; }
 
   #chart { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; cursor: pointer; user-select: none; }
+  th:hover { color: var(--text); }
+  th.sorted { color: var(--accent); }
   td { padding: 8px; border-bottom: 1px solid var(--border); }
   td.BUY { color: var(--green); }
   td.SELL { color: var(--red); }
 
-  .table-scroll { max-height: 480px; overflow-y: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; }
-  .table-scroll table { margin-top: 0; }
-  .table-scroll thead th { position: sticky; top: 0; background: #171b26; z-index: 1; }
-  .clickable-row { cursor: pointer; }
-  .clickable-row:hover { background: rgba(255,255,255,0.03); }
+  .screener-page { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+  .screener-header { margin-bottom: 16px; }
+  .screener-header h2 { margin: 0 0 4px 0; font-size: 20px; }
+  .screener-header p { color: var(--muted); font-size: 12px; margin: 0; }
 
-  .modal-overlay {
-    display: none;
-    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-    z-index: 100; align-items: center; justify-content: center;
-  }
+  .pagination { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .pagination span { color: var(--muted); font-size: 12px; }
+
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
-  .modal-box {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    width: 90%; max-width: 900px; max-height: 85vh; overflow-y: auto; padding: 20px;
-  }
+  .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; width: 90%; max-width: 900px; max-height: 85vh; overflow-y: auto; padding: 20px; }
   .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .modal-header h2 { margin: 0; font-size: 18px; }
   .modal-close { cursor: pointer; font-size: 20px; color: var(--muted); background: none; border: none; }
@@ -139,81 +94,92 @@
 <body>
 
 <header>
-  <h1>📈 Trading Bot Dashboard</h1>
+  <h1>📈 Trading Bot</h1>
   <span id="statusPill" class="status-pill stopped">Stopped</span>
 </header>
 
-<div class="controls">
-  <input id="symbolsInput" placeholder="SBIFUNDS,RELIANCE,TCS (blank = default watchlist)" style="width: 320px;">
-  <input id="tickSeconds" type="number" step="0.1" value="0.5" style="width: 70px;" title="tick seconds">
-  <button class="primary" id="startBtn">Start Bot</button>
-  <button class="danger" id="stopBtn">Stop Bot</button>
-  <span style="color: var(--muted); font-size: 12px; margin-left: 12px;">API: <span id="apiBase"></span></span>
+<div class="tabs">
+  <button class="tab-btn active" data-tab="bot">Bot Dashboard</button>
+  <button class="tab-btn" data-tab="screener">Stock Screener</button>
 </div>
 
-<div class="layout">
-  <div class="sidebar">
-    <h2>Watchlist &amp; Screener</h2>
-    <div id="watchlist">
-      <p style="color: var(--muted); font-size: 13px;">Start the bot to populate the watchlist.</p>
-    </div>
+<!-- ============ TAB 1: BOT DASHBOARD ============ -->
+<div class="tab-panel active" id="tab-bot">
 
-    <h2 style="margin-top: 24px;">Research (Wider Universe)</h2>
-    <button id="discoverBtn" style="width: 100%; margin-bottom: 10px;">Scan 20 NSE Stocks</button>
-    <p style="color: var(--muted); font-size: 11px; margin-top: -4px;">Informational only, not investment advice.</p>
-    <div id="discoverResults"></div>
+  <div class="controls">
+    <input id="symbolsInput" placeholder="SBIFUNDS,RELIANCE,TCS (blank = default watchlist)" style="width: 320px;">
+    <input id="tickSeconds" type="number" step="0.1" value="0.5" style="width: 70px;" title="tick seconds">
+    <button class="primary" id="startBtn">Start Bot</button>
+    <button class="danger" id="stopBtn">Stop Bot</button>
+    <span style="color: var(--muted); font-size: 12px; margin-left: 12px;">API: <span id="apiBase"></span></span>
   </div>
 
-  <div class="main">
-    <div class="metrics">
-      <div class="metric"><div class="label">Selected</div><div class="value" id="selectedSymbol">—</div></div>
-      <div class="metric"><div class="label">Cash</div><div class="value" id="cashVal">—</div></div>
-      <div class="metric"><div class="label">Portfolio Value</div><div class="value" id="portfolioVal">—</div></div>
-    </div>
-    <div id="chart"></div>
+  <div class="layout">
+    <div class="sidebar">
+      <h2>Watchlist &amp; Screener</h2>
+      <div id="watchlist">
+        <p style="color: var(--muted); font-size: 13px;">Start the bot to populate the watchlist.</p>
+      </div>
 
-    <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">Trade Log</h2>
-    <table>
-      <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Cash After</th></tr></thead>
-      <tbody id="tradesBody"><tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr></tbody>
-    </table>
-
-    <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">
-      Long-Term Screener - Full NSE Universe
-    </h2>
-    <p style="color: var(--muted); font-size: 11px; margin: -4px 0 10px 0;">
-      Backward-looking historical performance only. Not investment advice.
-      Relative strength = stock return minus Nifty 50 return for the same period (did it actually beat the market?).
-      Volatility = annualized swing size (risk), not a prediction.
-    </p>
-    <div class="controls" style="padding: 0 0 12px 0; border-bottom: none;">
-      <select id="rankByPeriod">
-        <option value="3mo">Rank by 3mo</option>
-        <option value="6mo">Rank by 6mo</option>
-        <option value="1y" selected>Rank by 1y</option>
-        <option value="2y">Rank by 2y</option>
-      </select>
-      <button class="primary" id="scanLongTermBtn">Scan Next 50 Stocks</button>
-      <button id="resetLongTermBtn">Reset</button>
-      <input id="symbolFilter" placeholder="Filter by symbol or sector..." style="width: 200px;">
-      <span id="longTermStatus" style="color: var(--muted); font-size: 12px;"></span>
+      <h2 style="margin-top: 24px;">Research (Wider Universe)</h2>
+      <button id="discoverBtn" style="width: 100%; margin-bottom: 10px;">Scan 20 NSE Stocks</button>
+      <p style="color: var(--muted); font-size: 11px; margin-top: -4px;">Informational only, not investment advice.</p>
+      <div id="discoverResults"></div>
     </div>
-    <div class="table-scroll">
+
+    <div class="main">
+      <div class="metrics">
+        <div class="metric"><div class="label">Selected</div><div class="value" id="selectedSymbol">—</div></div>
+        <div class="metric"><div class="label">Cash</div><div class="value" id="cashVal">—</div></div>
+        <div class="metric"><div class="label">Portfolio Value</div><div class="value" id="portfolioVal">—</div></div>
+      </div>
+      <div id="chart"></div>
+
+      <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">Trade Log</h2>
       <table>
-        <thead>
-          <tr>
-            <th>Symbol</th><th>Price</th><th>3mo</th><th>6mo</th><th>1y</th><th>2y</th>
-            <th>vs Nifty</th><th>Volatility</th><th>P/E</th><th>Sector</th><th>Consistency</th>
-          </tr>
-        </thead>
-        <tbody id="longTermBody">
-          <tr><td colspan="11" style="color: var(--muted);">Click "Scan Next 50 Stocks" to start paging through the full ~2,075-stock NSE universe.</td></tr>
-        </tbody>
+        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Cash After</th></tr></thead>
+        <tbody id="tradesBody"><tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr></tbody>
       </table>
     </div>
   </div>
 </div>
 
+<!-- ============ TAB 2: STOCK SCREENER (full width, its own page) ============ -->
+<div class="tab-panel" id="tab-screener">
+  <div class="screener-page">
+    <div class="screener-header">
+      <h2>Long-Term Stock Screener - Full NSE Universe</h2>
+      <p>Backward-looking historical performance only. Not investment advice. "vs Nifty" = stock return minus Nifty 50 return for the same period (did it actually beat the market?). Volatility = annualized swing size (risk), not a prediction.</p>
+    </div>
+
+    <div class="controls" style="padding: 0 0 12px 0; border-bottom: none;">
+      <input id="symbolFilter" placeholder="Search symbol or sector..." style="width: 220px;">
+      <button class="primary" id="scanPageBtn">Load Page</button>
+      <div class="pagination">
+        <button id="prevPageBtn">&larr; Prev</button>
+        <span id="pageIndicator">Page 1</span>
+        <button id="nextPageBtn">Next &rarr;</button>
+      </div>
+      <span id="longTermStatus" style="color: var(--muted); font-size: 12px;"></span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="symbol">Symbol</th><th data-sort="last_price">Price</th>
+          <th data-sort="3mo">3mo</th><th data-sort="6mo">6mo</th><th data-sort="1y">1y</th><th data-sort="2y">2y</th>
+          <th data-sort="relative_strength_pct">vs Nifty</th><th data-sort="volatility_pct">Volatility</th>
+          <th data-sort="pe_ratio">P/E</th><th>Sector</th><th>Consistency</th>
+        </tr>
+      </thead>
+      <tbody id="longTermBody">
+        <tr><td colspan="11" style="color: var(--muted);">Click "Load Page" to fetch the first 50 stocks (Page 0-50 of ~2,075).</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============ STOCK DETAIL MODAL ============ -->
 <div class="modal-overlay" id="stockModal">
   <div class="modal-box">
     <div class="modal-header">
@@ -232,6 +198,18 @@
 const API = window.location.origin;
 document.getElementById('apiBase').textContent = API;
 
+// ============ TAB SWITCHING ============
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'bot' && chart) chart.applyOptions({ width: document.getElementById('chart').clientWidth });
+  });
+});
+
+// ============ BOT DASHBOARD LOGIC ============
 let chart, candleSeries;
 let selectedSymbol = null;
 let pollTimer = null;
@@ -239,15 +217,13 @@ let pollTimer = null;
 function initChart() {
   const el = document.getElementById('chart');
   chart = LightweightCharts.createChart(el, {
-    width: el.clientWidth,
-    height: 420,
+    width: el.clientWidth, height: 420,
     layout: { background: { color: '#12161f' }, textColor: '#e6e9ef' },
     grid: { vertLines: { color: '#232838' }, horzLines: { color: '#232838' } },
     timeScale: { timeVisible: true, secondsVisible: true },
   });
   candleSeries = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350',
-    borderVisible: false,
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
     wickUpColor: '#26a69a', wickDownColor: '#ef5350',
   });
   window.addEventListener('resize', () => chart.applyOptions({ width: el.clientWidth }));
@@ -260,11 +236,7 @@ async function startBot() {
   if (symbols) params.set('symbols', symbols);
   const res = await fetch(`${API}/api/bot/start?${params}`, { method: 'POST' });
   const data = await res.json();
-  if (data.status) {
-    startPolling();
-  } else {
-    alert('Start failed: ' + (data.reason || 'unknown'));
-  }
+  if (data.status) { startPolling(); } else { alert('Start failed: ' + (data.reason || 'unknown')); }
 }
 
 async function stopBot() {
@@ -274,31 +246,20 @@ async function stopBot() {
   document.getElementById('statusPill').className = 'status-pill stopped';
 }
 
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(refreshAll, 1500);
-  refreshAll();
-}
-function stopPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-}
+function startPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(refreshAll, 1500); refreshAll(); }
+function stopPolling() { if (pollTimer) clearInterval(pollTimer); }
 
 async function refreshAll() {
   const statusRes = await fetch(`${API}/api/bot/status`);
   const status = await statusRes.json();
-
   const pill = document.getElementById('statusPill');
   if (status.running) {
-    pill.textContent = 'Running';
-    pill.className = 'status-pill running';
+    pill.textContent = 'Running'; pill.className = 'status-pill running';
     document.getElementById('cashVal').textContent = '₹' + Number(status.cash).toLocaleString('en-IN', {maximumFractionDigits: 2});
     document.getElementById('portfolioVal').textContent = '₹' + Number(status.portfolio_value).toLocaleString('en-IN', {maximumFractionDigits: 2});
-    if (!selectedSymbol && status.symbols && status.symbols.length) {
-      selectedSymbol = status.symbols[0];
-    }
+    if (!selectedSymbol && status.symbols && status.symbols.length) selectedSymbol = status.symbols[0];
   } else {
-    pill.textContent = 'Stopped';
-    pill.className = 'status-pill stopped';
+    pill.textContent = 'Stopped'; pill.className = 'status-pill stopped';
   }
 
   const screenerRes = await fetch(`${API}/api/watchlist/screener`);
@@ -319,10 +280,7 @@ async function refreshAll() {
 
 function renderWatchlist(results) {
   const el = document.getElementById('watchlist');
-  if (!results.length) {
-    el.innerHTML = '<p style="color: var(--muted); font-size: 13px;">No data yet.</p>';
-    return;
-  }
+  if (!results.length) { el.innerHTML = '<p style="color: var(--muted); font-size: 13px;">No data yet.</p>'; return; }
   el.innerHTML = results.map(r => `
     <div class="watchlist-row ${r.symbol === selectedSymbol ? 'active' : ''}" onclick="selectSymbol('${r.symbol}')">
       <div>
@@ -334,18 +292,12 @@ function renderWatchlist(results) {
   `).join('');
 }
 
-function selectSymbol(sym) {
-  selectedSymbol = sym;
-  refreshAll();
-}
+function selectSymbol(sym) { selectedSymbol = sym; refreshAll(); }
 window.selectSymbol = selectSymbol;
 
 function renderTrades(trades) {
   const body = document.getElementById('tradesBody');
-  if (!trades.length) {
-    body.innerHTML = '<tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr>';
-    return;
-  }
+  if (!trades.length) { body.innerHTML = '<tr><td colspan="6" style="color: var(--muted);">No trades yet.</td></tr>'; return; }
   body.innerHTML = trades.map(t => `
     <tr>
       <td>${new Date(t.timestamp).toLocaleTimeString()}</td>
@@ -363,89 +315,109 @@ document.getElementById('stopBtn').addEventListener('click', stopBot);
 
 async function runDiscover() {
   const btn = document.getElementById('discoverBtn');
-  btn.disabled = true;
-  btn.textContent = 'Scanning...';
-  const res = await fetch(`${API}/api/discover?limit=10`);
-  const data = await res.json();
-  renderDiscover(data.candidates || []);
-  btn.disabled = false;
-  btn.textContent = 'Scan 20 NSE Stocks';
+  btn.disabled = true; btn.textContent = 'Scanning...';
+  try {
+    const res = await fetch(`${API}/api/discover?limit=10`);
+    if (!res.ok) throw new Error('Server error: ' + res.status);
+    const data = await res.json();
+    renderDiscover(data.candidates || []);
+  } catch (err) {
+    document.getElementById('discoverResults').innerHTML = `<p style="color: var(--red); font-size: 12px;">Scan failed: ${err.message}</p>`;
+  } finally { btn.disabled = false; btn.textContent = 'Scan 20 NSE Stocks'; }
 }
 
 function renderDiscover(candidates) {
   const el = document.getElementById('discoverResults');
-  if (!candidates.length) {
-    el.innerHTML = '<p style="color: var(--muted); font-size: 12px;">No data (check internet connection).</p>';
-    return;
-  }
+  if (!candidates.length) { el.innerHTML = '<p style="color: var(--muted); font-size: 12px;">No data (check internet connection).</p>'; return; }
   el.innerHTML = candidates.map(c => `
     <div class="watchlist-row" style="cursor: default;">
       <div>
         <div class="sym">${c.symbol}</div>
-        <div class="price">₹${c.last_price} &nbsp; 3mo: ${c.momentum_3m_pct >= 0 ? '+' : ''}${c.momentum_3m_pct}% ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
+        <div class="price">₹${c.last_price ?? 'N/A'} &nbsp; 3mo: ${c.momentum_pct != null ? (c.momentum_pct >= 0 ? '+' : '') + c.momentum_pct + '%' : 'N/A'} ${c.pe_ratio ? '&nbsp; P/E: ' + c.pe_ratio.toFixed(1) : ''}</div>
       </div>
       <span class="badge HOLD">${c.research_score}</span>
     </div>
   `).join('');
 }
-
 document.getElementById('discoverBtn').addEventListener('click', runDiscover);
 
-let longTermOffset = 0;
-let longTermAccumulated = [];
-let longTermCandidateMap = {};
+
+// ============ STOCK SCREENER LOGIC (real pagination, Groww-style) ============
+let currentPageOffset = 0;
+let pageCache = {};       // offset -> array of candidates for that page
+let totalUniverseSize = null;
+let currentSort = { key: '1y', dir: 'desc' };
+let candidateLookup = {}; // symbol -> candidate object, for the detail modal
 let modalChartInstance = null;
 
-async function runLongTermScan() {
-  const btn = document.getElementById('scanLongTermBtn');
+async function loadPage(offset) {
+  const btn = document.getElementById('scanPageBtn');
   const status = document.getElementById('longTermStatus');
-  const rankBy = document.getElementById('rankByPeriod').value;
 
-  btn.disabled = true;
-  btn.textContent = 'Scanning...';
-  status.textContent = `Fetching stocks ${longTermOffset}-${longTermOffset + 50}... (real history per stock, ~20-40s)`;
+  if (pageCache[offset]) {
+    currentPageOffset = offset;
+    renderScreenerPage();
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Loading...';
+  status.textContent = `Fetching stocks ${offset}-${offset + 50}... (~20-40s, real history per stock)`;
 
   try {
-    const res = await fetch(`${API}/api/discover/universe-batch?offset=${longTermOffset}&batch_size=50&rank_by=${rankBy}`);
+    const res = await fetch(`${API}/api/discover/universe-batch?offset=${offset}&batch_size=50&rank_by=1y`);
     const data = await res.json();
 
     if (data.status === false) {
+      document.getElementById('longTermBody').innerHTML = `<tr><td colspan="11" style="color: var(--red);">${data.reason}</td></tr>`;
       status.textContent = '';
-      document.getElementById('longTermBody').innerHTML =
-        `<tr><td colspan="11" style="color: var(--red);">${data.reason}</td></tr>`;
       return;
     }
 
-    longTermAccumulated = longTermAccumulated.concat(data.candidates || []);
-    longTermOffset = data.next_offset;
+    pageCache[offset] = data.candidates || [];
+    totalUniverseSize = data.total_symbols_in_universe;
+    currentPageOffset = offset;
+    (data.candidates || []).forEach(c => candidateLookup[c.symbol] = c);
 
-    renderLongTerm(longTermAccumulated, rankBy);
-    status.textContent = `Scanned ${longTermAccumulated.length} of ${data.total_symbols_in_universe} total NSE stocks.`;
-
-    if (!data.has_more) {
-      btn.disabled = true;
-      btn.textContent = 'Full universe scanned';
-    }
+    renderScreenerPage();
+    status.textContent = `Loaded ${data.scanned_successfully} stocks. Total universe: ${totalUniverseSize}.`;
   } catch (err) {
     status.textContent = '';
-    document.getElementById('longTermBody').innerHTML =
-      `<tr><td colspan="11" style="color: var(--red);">Scan failed: ${err.message}</td></tr>`;
+    document.getElementById('longTermBody').innerHTML = `<tr><td colspan="11" style="color: var(--red);">Load failed: ${err.message}</td></tr>`;
   } finally {
-    if (btn.textContent !== 'Full universe scanned') {
-      btn.disabled = false;
-      btn.textContent = 'Scan Next 50 Stocks';
-    }
+    btn.disabled = false; btn.textContent = 'Load Page';
   }
 }
 
-function resetLongTermScan() {
-  longTermOffset = 0;
-  longTermAccumulated = [];
-  document.getElementById('longTermStatus').textContent = '';
-  document.getElementById('scanLongTermBtn').disabled = false;
-  document.getElementById('scanLongTermBtn').textContent = 'Scan Next 50 Stocks';
-  document.getElementById('longTermBody').innerHTML =
-    '<tr><td colspan="11" style="color: var(--muted);">Click "Scan Next 50 Stocks" to start paging through the full ~2,075-stock NSE universe.</td></tr>';
+function renderScreenerPage() {
+  const pageNum = Math.floor(currentPageOffset / 50) + 1;
+  const totalPages = totalUniverseSize ? Math.ceil(totalUniverseSize / 50) : '?';
+  document.getElementById('pageIndicator').textContent = `Page ${pageNum} of ${totalPages}`;
+  document.getElementById('prevPageBtn').disabled = currentPageOffset === 0;
+  document.getElementById('nextPageBtn').disabled = totalUniverseSize !== null && (currentPageOffset + 50) >= totalUniverseSize;
+
+  let rows = pageCache[currentPageOffset] || [];
+
+  const filterText = (document.getElementById('symbolFilter').value || '').toLowerCase().trim();
+  if (filterText) {
+    const allLoaded = Object.values(pageCache).flat();
+    rows = allLoaded.filter(c => c.symbol.toLowerCase().includes(filterText) || (c.sector || '').toLowerCase().includes(filterText));
+  }
+
+  rows = sortRows(rows);
+  renderScreenerTable(rows);
+}
+
+function sortRows(rows) {
+  const { key, dir } = currentSort;
+  return [...rows].sort((a, b) => {
+    let av, bv;
+    if (['3mo', '6mo', '1y', '2y'].includes(key)) { av = a.returns_pct?.[key]; bv = b.returns_pct?.[key]; }
+    else { av = a[key]; bv = b[key]; }
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    if (typeof av === 'string') return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    return dir === 'asc' ? av - bv : bv - av;
+  });
 }
 
 function pctCell(val) {
@@ -455,44 +427,19 @@ function pctCell(val) {
   return `<td style="color: ${color};">${sign}${val}%</td>`;
 }
 
-function renderLongTerm(candidates, rankBy) {
+function renderScreenerTable(candidates) {
   const body = document.getElementById('longTermBody');
   if (!candidates.length) {
-    body.innerHTML = '<tr><td colspan="11" style="color: var(--muted);">No data (check internet connection).</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" style="color: var(--muted);">No matches. Try a different page or filter.</td></tr>';
     return;
   }
 
-  const filterText = (document.getElementById('symbolFilter').value || '').toLowerCase().trim();
-  let filtered = candidates;
-  if (filterText) {
-    filtered = candidates.filter(c =>
-      c.symbol.toLowerCase().includes(filterText) ||
-      (c.sector || '').toLowerCase().includes(filterText)
-    );
-  }
-
-  const sorted = [...filtered].sort((a, b) => {
-    const av = a.returns_pct?.[rankBy];
-    const bv = b.returns_pct?.[rankBy];
-    if (av === null || av === undefined) return 1;
-    if (bv === null || bv === undefined) return -1;
-    return bv - av;
-  });
-
-  if (!sorted.length) {
-    body.innerHTML = '<tr><td colspan="11" style="color: var(--muted);">No matches for that filter.</td></tr>';
-    return;
-  }
-
-  body.innerHTML = sorted.map(c => {
-    longTermCandidateMap[c.symbol] = c;  // cache for the detail modal, no refetch needed
-
+  body.innerHTML = candidates.map(c => {
     const r = c.returns_pct || {};
     const periods = ['3mo', '6mo', '1y', '2y'];
     const values = periods.map(p => r[p]).filter(v => v !== null && v !== undefined);
     const allPositive = values.length === 4 && values.every(v => v > 0);
     const allNegative = values.length === 4 && values.every(v => v < 0);
-
     let consistency = '<span class="badge HOLD">Mixed</span>';
     if (allPositive) consistency = '<span class="badge BUY">Consistent Up</span>';
     if (allNegative) consistency = '<span class="badge SELL">Consistent Down</span>';
@@ -503,13 +450,10 @@ function renderLongTerm(candidates, rankBy) {
       : `<td style="color: ${relStrength > 0 ? 'var(--green)' : 'var(--red)'};">${relStrength > 0 ? '+' : ''}${relStrength}pts</td>`;
 
     return `
-      <tr class="clickable-row" onclick="openStockDetail('${c.symbol}')">
+      <tr class="clickable-row" style="cursor:pointer;" onclick="openStockDetail('${c.symbol}')">
         <td style="font-weight: 600;">${c.symbol}</td>
         <td>₹${c.last_price ?? 'N/A'}</td>
-        ${pctCell(r['3mo'])}
-        ${pctCell(r['6mo'])}
-        ${pctCell(r['1y'])}
-        ${pctCell(r['2y'])}
+        ${pctCell(r['3mo'])} ${pctCell(r['6mo'])} ${pctCell(r['1y'])} ${pctCell(r['2y'])}
         ${relCell}
         <td>${c.volatility_pct ?? 'N/A'}%</td>
         <td>${c.pe_ratio ? c.pe_ratio.toFixed(1) : 'N/A'}</td>
@@ -521,12 +465,10 @@ function renderLongTerm(candidates, rankBy) {
 }
 
 async function openStockDetail(symbol) {
-  const c = longTermCandidateMap[symbol];
+  const c = candidateLookup[symbol];
   if (!c) return;
-
   document.getElementById('modalSymbol').textContent = symbol;
   document.getElementById('stockModal').classList.add('open');
-
   const r = c.returns_pct || {};
   document.getElementById('modalMetrics').innerHTML = `
     <div class="modal-metric"><div class="label">Price</div><div class="value">₹${c.last_price ?? 'N/A'}</div></div>
@@ -538,10 +480,8 @@ async function openStockDetail(symbol) {
     <div class="modal-metric"><div class="label">3mo</div><div class="value" style="font-size: 13px;">${r['3mo'] ?? 'N/A'}%</div></div>
     <div class="modal-metric"><div class="label">2y</div><div class="value" style="font-size: 13px;">${r['2y'] ?? 'N/A'}%</div></div>
   `;
-
   const chartEl = document.getElementById('modalChart');
   chartEl.innerHTML = '<p style="color: var(--muted); padding: 20px;">Loading chart...</p>';
-
   try {
     const res = await fetch(`${API}/api/discover/stock-chart/${symbol}?period=1y`);
     const data = await res.json();
@@ -552,8 +492,7 @@ async function openStockDetail(symbol) {
     chartEl.innerHTML = '';
     if (modalChartInstance) modalChartInstance.remove();
     modalChartInstance = LightweightCharts.createChart(chartEl, {
-      width: chartEl.clientWidth,
-      height: 350,
+      width: chartEl.clientWidth, height: 350,
       layout: { background: { color: '#12161f' }, textColor: '#e6e9ef' },
       grid: { vertLines: { color: '#232838' }, horzLines: { color: '#232838' } },
       timeScale: { timeVisible: false },
@@ -569,22 +508,24 @@ async function openStockDetail(symbol) {
 }
 window.openStockDetail = openStockDetail;
 
-function closeStockDetail() {
-  document.getElementById('stockModal').classList.remove('open');
-}
-
+function closeStockDetail() { document.getElementById('stockModal').classList.remove('open'); }
 document.getElementById('modalCloseBtn').addEventListener('click', closeStockDetail);
-document.getElementById('stockModal').addEventListener('click', (e) => {
-  if (e.target.id === 'stockModal') closeStockDetail();
-});
-document.getElementById('symbolFilter').addEventListener('input', () => {
-  if (longTermAccumulated.length) renderLongTerm(longTermAccumulated, document.getElementById('rankByPeriod').value);
-});
+document.getElementById('stockModal').addEventListener('click', (e) => { if (e.target.id === 'stockModal') closeStockDetail(); });
 
-document.getElementById('scanLongTermBtn').addEventListener('click', runLongTermScan);
-document.getElementById('resetLongTermBtn').addEventListener('click', resetLongTermScan);
-document.getElementById('rankByPeriod').addEventListener('change', () => {
-  if (longTermAccumulated.length) renderLongTerm(longTermAccumulated, document.getElementById('rankByPeriod').value);
+document.getElementById('scanPageBtn').addEventListener('click', () => loadPage(currentPageOffset));
+document.getElementById('prevPageBtn').addEventListener('click', () => loadPage(Math.max(0, currentPageOffset - 50)));
+document.getElementById('nextPageBtn').addEventListener('click', () => loadPage(currentPageOffset + 50));
+document.getElementById('symbolFilter').addEventListener('input', renderScreenerPage);
+
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (currentSort.key === key) currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+    else currentSort = { key, dir: 'desc' };
+    document.querySelectorAll('th[data-sort]').forEach(h => h.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderScreenerPage();
+  });
 });
 
 initChart();

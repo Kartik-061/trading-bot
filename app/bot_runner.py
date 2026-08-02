@@ -7,7 +7,8 @@ state, so sharing one across symbols would corrupt the signals).
 import threading
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 from app.database import SessionLocal
 from app.models import BotSession, PriceTick
@@ -15,6 +16,32 @@ from app.broker.paper_broker import PaperBroker
 from app.data_feed.feeds import SimulatedFeed
 from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
+
+logger = logging.getLogger("bot_runner")
+
+IST = ZoneInfo("Asia/Kolkata")
+MARKET_OPEN = dtime(9, 15)
+MARKET_CLOSE = dtime(15, 30)
+
+NSE_HOLIDAYS_2026 = {
+    "2026-01-26", "2026-03-06", "2026-03-21", "2026-04-14", "2026-05-01",
+    "2026-08-15", "2026-10-02", "2026-10-21", "2026-11-04", "2026-12-25",
+}
+
+
+def is_market_open(now_ist: datetime = None) -> bool:
+    """
+    True only during real NSE trading hours: 9:15-15:30 IST, Monday-Friday,
+    excluding known holidays. The simulated feed has no concept of time on
+    its own, so without this check it happily trades at 2am on a Saturday.
+    """
+    now_ist = now_ist or datetime.now(IST)
+    if now_ist.weekday() >= 5:
+        return False
+    if now_ist.strftime("%Y-%m-%d") in NSE_HOLIDAYS_2026:
+        return False
+    current_time = now_ist.time()
+    return MARKET_OPEN <= current_time <= MARKET_CLOSE
 
 logger = logging.getLogger("bot_runner")
 
@@ -88,6 +115,10 @@ class BotRunner:
 
         try:
             while self.running:
+                if not is_market_open():
+                    self.last_signal = {sym: "MARKET_CLOSED" for sym in self.symbols}
+                    time.sleep(min(self.tick_seconds * 10, 30))
+                    continue
                 for symbol in self.symbols:
                     price = self.feed.get_price(symbol)
 
