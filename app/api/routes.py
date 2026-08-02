@@ -17,8 +17,9 @@ from app.data_feed.feeds import SimulatedFeed
 from app.screener.candidates import scan_universe, NIFTY_UNIVERSE
 from app.screener.long_term import scan_long_term, PERIOD_WINDOWS_TRADING_DAYS
 from app.screener.nse_universe import get_universe_batch
-from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv
+from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv, fetch_ohlc_for_chart
 from app.backtest.portfolio_stats import test_significance
+
 router = APIRouter()
 
 
@@ -115,6 +116,7 @@ def list_sessions(db: Session = Depends(get_db)):
         for s in sessions
     ]
 
+
 @router.get("/discover")
 def discover(limit: int = 10):
     """
@@ -128,6 +130,7 @@ def discover(limit: int = 10):
                        "Past momentum and valuation do not guarantee future returns.",
         "candidates": results[:limit],
     }
+
 
 @router.post("/backtest")
 def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
@@ -158,6 +161,8 @@ def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
         "total_costs_rs": result.total_costs,
         "note": "Backtested on simulated data - run against real historical candles before trusting these numbers.",
     }
+
+
 @router.post("/backtest/historical")
 def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
                          interval: str = "5m", period: str = "60d",
@@ -192,6 +197,8 @@ def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
         "total_costs_rs": result.total_costs,
         "note": "Tested on real historical price data.",
     }
+
+
 @router.post("/backtest/batch")
 def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
                     interval: str = "5m", period: str = "60d",
@@ -250,6 +257,7 @@ def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
         "results": results,
     }
 
+
 @router.post("/backtest/significance")
 def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
                            interval: str = "5m", period: str = "60d",
@@ -261,7 +269,8 @@ def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RE
     """
     The rigorous version of 'does this strategy work' - pools every trade's
     P&L across every symbol given and tests whether the average trade result
-    is statistically distinguishable from zero.
+    is statistically distinguishable from zero, instead of eyeballing which
+    stocks happened to look positive.
     """
     strategy_cls = STRATEGY_REGISTRY.get(strategy)
     if strategy_cls is None:
@@ -285,7 +294,7 @@ def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RE
             else:
                 symbol_data[symbol] = fetch_historical_closes(symbol, interval=interval, period=period)
         except ValueError:
-            continue
+            continue  # skip symbols that failed to fetch, don't kill the whole test
 
     if not symbol_data:
         return {"status": False, "reason": "No data fetched for any symbol."}
@@ -294,12 +303,15 @@ def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RE
     result["strategy"] = strategy
     result["strategy_kwargs"] = kwargs
     return result
+
+
 @router.get("/discover/long-term")
 def discover_long_term(rank_by: str = "1y", limit: int = 15):
     """
     Ranks a wide universe of NSE stocks (large + mid cap, 42 names) by
     trailing return over the chosen holding period. Purely backward-looking
-    historical data - NOT a prediction of future performance.
+    historical data - NOT a prediction of future performance. Use this to
+    narrow down names worth your own research, not as a buy signal.
 
     rank_by: '3mo', '6mo', '1y', or '2y'
     """
@@ -316,12 +328,18 @@ def discover_long_term(rank_by: str = "1y", limit: int = 15):
         "candidates": results[:limit],
     }
 
+
 @router.get("/discover/universe-batch")
 def discover_universe_batch(offset: int = 0, batch_size: int = 50, rank_by: str = "1y"):
     """
-    Scans a PAGE of the full ~2,000-stock NSE universe. One page at a time -
+    Scans a PAGE of the full ~2,000-stock NSE universe (real official master
+    list, same source Groww/Angel One use). One page at a time on purpose -
     scanning all ~2000 in one request would take many minutes and likely
-    trigger Yahoo Finance rate limiting. Page through: offset=0,50,100...
+    trigger Yahoo Finance rate limiting. Page through with offset: 0, 50,
+    100, 150... until has_more is false.
+
+    Needs data/EQUITY_L.csv downloaded from:
+    https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
     """
     if rank_by not in PERIOD_WINDOWS_TRADING_DAYS:
         return {"status": False,
@@ -346,3 +364,18 @@ def discover_universe_batch(offset: int = 0, batch_size: int = 50, rank_by: str 
         "ranked_by": rank_by,
         "candidates": results,
     }
+
+
+@router.get("/discover/stock-chart/{symbol}")
+def stock_chart(symbol: str, period: str = "1y"):
+    """
+    Full OHLC candles for one stock, for the long-term screener's
+    click-to-view-detail chart. period: '3mo', '6mo', '1y', '2y', etc
+    (any yfinance-valid period string).
+    """
+    try:
+        candles = fetch_ohlc_for_chart(symbol, period=period)
+    except ValueError as e:
+        return {"status": False, "reason": str(e)}
+
+    return {"symbol": symbol.upper(), "period": period, "candles": candles}

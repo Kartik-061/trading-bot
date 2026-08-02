@@ -106,11 +106,34 @@
 
   #chart { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 
-  table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
   td { padding: 8px; border-bottom: 1px solid var(--border); }
   td.BUY { color: var(--green); }
   td.SELL { color: var(--red); }
+
+  .table-scroll { max-height: 480px; overflow-y: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; }
+  .table-scroll table { margin-top: 0; }
+  .table-scroll thead th { position: sticky; top: 0; background: #171b26; z-index: 1; }
+  .clickable-row { cursor: pointer; }
+  .clickable-row:hover { background: rgba(255,255,255,0.03); }
+
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 100; align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    width: 90%; max-width: 900px; max-height: 85vh; overflow-y: auto; padding: 20px;
+  }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .modal-header h2 { margin: 0; font-size: 18px; }
+  .modal-close { cursor: pointer; font-size: 20px; color: var(--muted); background: none; border: none; }
+  .modal-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .modal-metric .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .modal-metric .value { font-size: 15px; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -156,10 +179,12 @@
     </table>
 
     <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; margin-top: 24px;">
-      Long-Term Screener (Large + Mid Cap)
+      Long-Term Screener - Full NSE Universe
     </h2>
     <p style="color: var(--muted); font-size: 11px; margin: -4px 0 10px 0;">
       Backward-looking historical performance only. Not investment advice.
+      Relative strength = stock return minus Nifty 50 return for the same period (did it actually beat the market?).
+      Volatility = annualized swing size (risk), not a prediction.
     </p>
     <div class="controls" style="padding: 0 0 12px 0; border-bottom: none;">
       <select id="rankByPeriod">
@@ -168,20 +193,38 @@
         <option value="1y" selected>Rank by 1y</option>
         <option value="2y">Rank by 2y</option>
       </select>
-      <button class="primary" id="scanLongTermBtn">Scan Long-Term Universe</button>
+      <button class="primary" id="scanLongTermBtn">Scan Next 50 Stocks</button>
+      <button id="resetLongTermBtn">Reset</button>
+      <input id="symbolFilter" placeholder="Filter by symbol or sector..." style="width: 200px;">
       <span id="longTermStatus" style="color: var(--muted); font-size: 12px;"></span>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Symbol</th><th>Price</th><th>3mo</th><th>6mo</th><th>1y</th><th>2y</th>
-          <th>P/E</th><th>Sector</th><th>Consistency</th>
-        </tr>
-      </thead>
-      <tbody id="longTermBody">
-        <tr><td colspan="9" style="color: var(--muted);">Click "Scan Long-Term Universe" to load.</td></tr>
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Price</th><th>3mo</th><th>6mo</th><th>1y</th><th>2y</th>
+            <th>vs Nifty</th><th>Volatility</th><th>P/E</th><th>Sector</th><th>Consistency</th>
+          </tr>
+        </thead>
+        <tbody id="longTermBody">
+          <tr><td colspan="11" style="color: var(--muted);">Click "Scan Next 50 Stocks" to start paging through the full ~2,075-stock NSE universe.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="stockModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="modalSymbol">-</h2>
+      <button class="modal-close" id="modalCloseBtn">✕</button>
+    </div>
+    <div class="modal-metrics" id="modalMetrics"></div>
+    <div id="modalChart" style="height: 350px;"></div>
+    <p style="color: var(--muted); font-size: 11px; margin-top: 10px;">
+      Backward-looking historical data only. Not investment advice.
+    </p>
   </div>
 </div>
 
@@ -348,29 +391,61 @@ function renderDiscover(candidates) {
 
 document.getElementById('discoverBtn').addEventListener('click', runDiscover);
 
+let longTermOffset = 0;
+let longTermAccumulated = [];
+let longTermCandidateMap = {};
+let modalChartInstance = null;
+
 async function runLongTermScan() {
   const btn = document.getElementById('scanLongTermBtn');
   const status = document.getElementById('longTermStatus');
   const rankBy = document.getElementById('rankByPeriod').value;
 
   btn.disabled = true;
-  btn.textContent = 'Scanning 42 stocks...';
-  status.textContent = 'This can take 20-30s (real 2-year history per stock).';
+  btn.textContent = 'Scanning...';
+  status.textContent = `Fetching stocks ${longTermOffset}-${longTermOffset + 50}... (real history per stock, ~20-40s)`;
 
   try {
-    const res = await fetch(`${API}/api/discover/long-term?rank_by=${rankBy}&limit=42`);
-    if (!res.ok) throw new Error('Server error: ' + res.status);
+    const res = await fetch(`${API}/api/discover/universe-batch?offset=${longTermOffset}&batch_size=50&rank_by=${rankBy}`);
     const data = await res.json();
-    renderLongTerm(data.candidates || []);
-    status.textContent = `${(data.candidates || []).length} stocks, ranked by ${rankBy}.`;
+
+    if (data.status === false) {
+      status.textContent = '';
+      document.getElementById('longTermBody').innerHTML =
+        `<tr><td colspan="11" style="color: var(--red);">${data.reason}</td></tr>`;
+      return;
+    }
+
+    longTermAccumulated = longTermAccumulated.concat(data.candidates || []);
+    longTermOffset = data.next_offset;
+
+    renderLongTerm(longTermAccumulated, rankBy);
+    status.textContent = `Scanned ${longTermAccumulated.length} of ${data.total_symbols_in_universe} total NSE stocks.`;
+
+    if (!data.has_more) {
+      btn.disabled = true;
+      btn.textContent = 'Full universe scanned';
+    }
   } catch (err) {
-    document.getElementById('longTermBody').innerHTML =
-      `<tr><td colspan="9" style="color: var(--red);">Scan failed: ${err.message}</td></tr>`;
     status.textContent = '';
+    document.getElementById('longTermBody').innerHTML =
+      `<tr><td colspan="11" style="color: var(--red);">Scan failed: ${err.message}</td></tr>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Scan Long-Term Universe';
+    if (btn.textContent !== 'Full universe scanned') {
+      btn.disabled = false;
+      btn.textContent = 'Scan Next 50 Stocks';
+    }
   }
+}
+
+function resetLongTermScan() {
+  longTermOffset = 0;
+  longTermAccumulated = [];
+  document.getElementById('longTermStatus').textContent = '';
+  document.getElementById('scanLongTermBtn').disabled = false;
+  document.getElementById('scanLongTermBtn').textContent = 'Scan Next 50 Stocks';
+  document.getElementById('longTermBody').innerHTML =
+    '<tr><td colspan="11" style="color: var(--muted);">Click "Scan Next 50 Stocks" to start paging through the full ~2,075-stock NSE universe.</td></tr>';
 }
 
 function pctCell(val) {
@@ -380,14 +455,38 @@ function pctCell(val) {
   return `<td style="color: ${color};">${sign}${val}%</td>`;
 }
 
-function renderLongTerm(candidates) {
+function renderLongTerm(candidates, rankBy) {
   const body = document.getElementById('longTermBody');
   if (!candidates.length) {
-    body.innerHTML = '<tr><td colspan="9" style="color: var(--muted);">No data (check internet connection).</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" style="color: var(--muted);">No data (check internet connection).</td></tr>';
     return;
   }
 
-  body.innerHTML = candidates.map(c => {
+  const filterText = (document.getElementById('symbolFilter').value || '').toLowerCase().trim();
+  let filtered = candidates;
+  if (filterText) {
+    filtered = candidates.filter(c =>
+      c.symbol.toLowerCase().includes(filterText) ||
+      (c.sector || '').toLowerCase().includes(filterText)
+    );
+  }
+
+  const sorted = [...filtered].sort((a, b) => {
+    const av = a.returns_pct?.[rankBy];
+    const bv = b.returns_pct?.[rankBy];
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    return bv - av;
+  });
+
+  if (!sorted.length) {
+    body.innerHTML = '<tr><td colspan="11" style="color: var(--muted);">No matches for that filter.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = sorted.map(c => {
+    longTermCandidateMap[c.symbol] = c;  // cache for the detail modal, no refetch needed
+
     const r = c.returns_pct || {};
     const periods = ['3mo', '6mo', '1y', '2y'];
     const values = periods.map(p => r[p]).filter(v => v !== null && v !== undefined);
@@ -398,24 +497,95 @@ function renderLongTerm(candidates) {
     if (allPositive) consistency = '<span class="badge BUY">Consistent Up</span>';
     if (allNegative) consistency = '<span class="badge SELL">Consistent Down</span>';
 
+    const relStrength = c.relative_strength_pct;
+    const relCell = relStrength === null || relStrength === undefined
+      ? '<td style="color: var(--muted);">N/A</td>'
+      : `<td style="color: ${relStrength > 0 ? 'var(--green)' : 'var(--red)'};">${relStrength > 0 ? '+' : ''}${relStrength}pts</td>`;
+
     return `
-      <tr>
+      <tr class="clickable-row" onclick="openStockDetail('${c.symbol}')">
         <td style="font-weight: 600;">${c.symbol}</td>
         <td>₹${c.last_price ?? 'N/A'}</td>
         ${pctCell(r['3mo'])}
         ${pctCell(r['6mo'])}
         ${pctCell(r['1y'])}
         ${pctCell(r['2y'])}
+        ${relCell}
+        <td>${c.volatility_pct ?? 'N/A'}%</td>
         <td>${c.pe_ratio ? c.pe_ratio.toFixed(1) : 'N/A'}</td>
-        <td style="color: var(--muted); font-size: 12px;">${c.sector ?? 'N/A'}</td>
+        <td style="color: var(--muted); font-size: 12px;">${c.sector || 'N/A'}</td>
         <td>${consistency}</td>
       </tr>
     `;
   }).join('');
 }
 
+async function openStockDetail(symbol) {
+  const c = longTermCandidateMap[symbol];
+  if (!c) return;
+
+  document.getElementById('modalSymbol').textContent = symbol;
+  document.getElementById('stockModal').classList.add('open');
+
+  const r = c.returns_pct || {};
+  document.getElementById('modalMetrics').innerHTML = `
+    <div class="modal-metric"><div class="label">Price</div><div class="value">₹${c.last_price ?? 'N/A'}</div></div>
+    <div class="modal-metric"><div class="label">1y Return</div><div class="value" style="color: ${(r['1y']||0) >= 0 ? 'var(--green)' : 'var(--red)'};">${r['1y'] ?? 'N/A'}%</div></div>
+    <div class="modal-metric"><div class="label">vs Nifty</div><div class="value">${c.relative_strength_pct ?? 'N/A'}pts</div></div>
+    <div class="modal-metric"><div class="label">Volatility</div><div class="value">${c.volatility_pct ?? 'N/A'}%</div></div>
+    <div class="modal-metric"><div class="label">P/E</div><div class="value">${c.pe_ratio ? c.pe_ratio.toFixed(1) : 'N/A'}</div></div>
+    <div class="modal-metric"><div class="label">Sector</div><div class="value" style="font-size: 12px;">${c.sector || 'N/A'}</div></div>
+    <div class="modal-metric"><div class="label">3mo</div><div class="value" style="font-size: 13px;">${r['3mo'] ?? 'N/A'}%</div></div>
+    <div class="modal-metric"><div class="label">2y</div><div class="value" style="font-size: 13px;">${r['2y'] ?? 'N/A'}%</div></div>
+  `;
+
+  const chartEl = document.getElementById('modalChart');
+  chartEl.innerHTML = '<p style="color: var(--muted); padding: 20px;">Loading chart...</p>';
+
+  try {
+    const res = await fetch(`${API}/api/discover/stock-chart/${symbol}?period=1y`);
+    const data = await res.json();
+    if (data.status === false || !data.candles || !data.candles.length) {
+      chartEl.innerHTML = `<p style="color: var(--red); padding: 20px;">Chart unavailable: ${data.reason || 'no data'}</p>`;
+      return;
+    }
+    chartEl.innerHTML = '';
+    if (modalChartInstance) modalChartInstance.remove();
+    modalChartInstance = LightweightCharts.createChart(chartEl, {
+      width: chartEl.clientWidth,
+      height: 350,
+      layout: { background: { color: '#12161f' }, textColor: '#e6e9ef' },
+      grid: { vertLines: { color: '#232838' }, horzLines: { color: '#232838' } },
+      timeScale: { timeVisible: false },
+    });
+    const series = modalChartInstance.addCandlestickSeries({
+      upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+      wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    });
+    series.setData(data.candles);
+  } catch (err) {
+    chartEl.innerHTML = `<p style="color: var(--red); padding: 20px;">Chart failed: ${err.message}</p>`;
+  }
+}
+window.openStockDetail = openStockDetail;
+
+function closeStockDetail() {
+  document.getElementById('stockModal').classList.remove('open');
+}
+
+document.getElementById('modalCloseBtn').addEventListener('click', closeStockDetail);
+document.getElementById('stockModal').addEventListener('click', (e) => {
+  if (e.target.id === 'stockModal') closeStockDetail();
+});
+document.getElementById('symbolFilter').addEventListener('input', () => {
+  if (longTermAccumulated.length) renderLongTerm(longTermAccumulated, document.getElementById('rankByPeriod').value);
+});
+
 document.getElementById('scanLongTermBtn').addEventListener('click', runLongTermScan);
-document.getElementById('rankByPeriod').addEventListener('change', runLongTermScan);
+document.getElementById('resetLongTermBtn').addEventListener('click', resetLongTermScan);
+document.getElementById('rankByPeriod').addEventListener('change', () => {
+  if (longTermAccumulated.length) renderLongTerm(longTermAccumulated, document.getElementById('rankByPeriod').value);
+});
 
 initChart();
 refreshAll();

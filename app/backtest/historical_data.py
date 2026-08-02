@@ -18,14 +18,12 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
     Returns a plain list of closing prices, oldest first - exactly what
     run_backtest() in engine.py expects.
 
-    Always raises ValueError on any failure (bad ticker, network hiccup,
-    empty data) so callers only ever need to catch one exception type.
+    symbol: NSE symbol without .NS suffix (e.g. "RELIANCE") - suffix added here.
+    interval: "5m", "15m", "1h", "1d", etc (Yahoo's supported intervals).
+    period: how far back to pull. "60d" is the max Yahoo allows for 5m data.
     """
-    try:
-        ticker = yf.Ticker(f"{symbol.upper()}.NS")
-        hist = ticker.history(interval=interval, period=period)
-    except Exception as e:
-        raise ValueError(f"Failed to fetch data for {symbol}: {e}")
+    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+    hist = ticker.history(interval=interval, period=period)
 
     if hist.empty:
         raise ValueError(
@@ -34,6 +32,7 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
         )
 
     return [round(float(p), 2) for p in hist["Close"].tolist()]
+
 
 def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d") -> list:
     """
@@ -54,3 +53,28 @@ def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d
         {"close": round(float(row["Close"]), 2), "volume": float(row["Volume"])}
         for _, row in hist.iterrows()
     ]
+
+
+def fetch_ohlc_for_chart(symbol: str, period: str = "1y", interval: str = "1d") -> list:
+    """
+    Full OHLC candles (not just close) for charting a stock's history -
+    used by the long-term screener's click-to-view-detail feature.
+    Returns candles in the {time, open, high, low, close} shape the
+    Lightweight Charts library expects.
+    """
+    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+    hist = ticker.history(period=period, interval=interval)
+
+    if hist.empty:
+        raise ValueError(f"No historical data for {symbol} at period={period}")
+
+    candles = []
+    for ts, row in hist.iterrows():
+        candles.append({
+            "time": int(ts.timestamp()),
+            "open": round(float(row["Open"]), 2),
+            "high": round(float(row["High"]), 2),
+            "low": round(float(row["Low"]), 2),
+            "close": round(float(row["Close"]), 2),
+        })
+    return candles
