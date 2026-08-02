@@ -16,6 +16,7 @@ from app.strategies import STRATEGY_REGISTRY
 from app.data_feed.feeds import SimulatedFeed
 from app.screener.candidates import scan_universe, NIFTY_UNIVERSE
 from app.screener.long_term import scan_long_term, PERIOD_WINDOWS_TRADING_DAYS
+from app.screener.nse_universe import get_universe_batch
 from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv
 from app.backtest.portfolio_stats import test_significance
 router = APIRouter()
@@ -313,4 +314,35 @@ def discover_long_term(rank_by: str = "1y", limit: int = 15):
                        "use this to narrow down names worth your own research.",
         "ranked_by": rank_by,
         "candidates": results[:limit],
+    }
+
+@router.get("/discover/universe-batch")
+def discover_universe_batch(offset: int = 0, batch_size: int = 50, rank_by: str = "1y"):
+    """
+    Scans a PAGE of the full ~2,000-stock NSE universe. One page at a time -
+    scanning all ~2000 in one request would take many minutes and likely
+    trigger Yahoo Finance rate limiting. Page through: offset=0,50,100...
+    """
+    if rank_by not in PERIOD_WINDOWS_TRADING_DAYS:
+        return {"status": False,
+                "reason": f"rank_by must be one of {list(PERIOD_WINDOWS_TRADING_DAYS.keys())}"}
+
+    try:
+        batch_info = get_universe_batch(offset=offset, batch_size=batch_size)
+    except FileNotFoundError as e:
+        return {"status": False, "reason": str(e)}
+
+    results = scan_long_term(symbols=batch_info["symbols"], rank_by=rank_by)
+
+    return {
+        "disclaimer": "Backward-looking historical performance only. Past returns over "
+                       "any period do not predict future returns. Not investment advice.",
+        "total_symbols_in_universe": batch_info["total_symbols_in_universe"],
+        "offset": batch_info["offset"],
+        "batch_size": batch_info["batch_size"],
+        "has_more": batch_info["has_more"],
+        "next_offset": batch_info["next_offset"],
+        "scanned_successfully": len(results),
+        "ranked_by": rank_by,
+        "candidates": results,
     }
