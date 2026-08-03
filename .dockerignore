@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+tests/
+*.tar.gz
+tradebot.db
+.env
