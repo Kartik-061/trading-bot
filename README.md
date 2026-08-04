@@ -3,6 +3,8 @@
 FastAPI + SQLAlchemy backend for an intraday trading bot. Same shape as
 BookIQ: modular app, DB-backed models, REST API, swappable pieces.
 
+![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)
+
 ## Structure
 
 ```
