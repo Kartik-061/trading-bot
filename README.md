@@ -1,7 +1,60 @@
-# Trading Bot — BookIQ-style backend
+![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)
 
-FastAPI + SQLAlchemy backend for an intraday trading bot. Same shape as
-BookIQ: modular app, DB-backed models, REST API, swappable pieces.
+# Trading Bot — NSE Paper Trading, Backtesting & Research Platform
+
+A full-stack trading research platform for Indian equities: a paper-trading
+bot, a rigorous backtesting engine with real cost modeling and statistical
+significance testing, and a research screener covering the entire ~2,000-stock
+NSE universe.
+
+**Live demo:** https://trading-bot-s2zl.onrender.com/dashboard/
+*(free-tier hosting — first load after inactivity may take ~30-60s to wake up.
+Public demo API key is shown in the dashboard banner.)*
+
+**Full findings write-up:** [STRATEGY_EVALUATION.md](./STRATEGY_EVALUATION.md)
+— the honest result of testing whether simple technical strategies actually
+have edge on NSE stocks, backed by real statistical significance testing,
+not eyeballed backtests.
+
+---
+
+## What this actually is
+
+Most "AI trading bot" projects show a backtest that looks good and stop
+there. This one goes further: every strategy here was tested with real
+Indian trading costs (brokerage, STT, GST, stamp duty), proper
+capital-percentage position sizing, and a statistical significance test
+that pools every trade and asks "is this actually distinguishable from
+random chance?" — not just "did the numbers look positive on one run."
+
+The honest result: the intraday strategies tested here do **not** show
+statistically significant edge once real costs are included (p=0.0016,
+proven negative — see the evaluation report). That's a real finding, not
+a failure to hide. The engineering discipline that produced that answer
+is the actual point of this project.
+
+## Features
+
+- **Paper trading bot** — runs a live watchlist against a simulated or real
+  price feed, executes signals automatically, tracks a full DB-backed trade
+  history. Market-hours aware (won't trade at 2am on a Saturday).
+- **Backtesting engine** — runs any strategy over real historical NSE data
+  (via Yahoo Finance), with:
+  - Real Indian intraday cost modeling (brokerage cap, STT, exchange
+    charges, GST, stamp duty)
+  - Capital-percentage position sizing (not a fixed share count)
+  - Statistical significance testing (pooled trade z-test)
+- **Three strategies**: EMA/RSI crossover, RSI mean-reversion (with
+  stop-loss/take-profit exit variants), and volume-confirmed crossover
+- **Research screener** covering the full official NSE stock list
+  (~2,000 symbols), with multi-period trailing returns (3mo/6mo/1y/2y),
+  relative strength vs Nifty 50, volatility, and P/E — paginated, sortable,
+  filterable
+- **Interactive dashboard** — candlestick charts, live watchlist, stock
+  detail modal with its own chart, trade log
+- **17-test automated suite**, run on every push via GitHub Actions CI
+- **Dockerized**, deployed live on Render
+- API key auth + rate limiting
 
 ## Structure
 
@@ -9,20 +62,43 @@ BookIQ: modular app, DB-backed models, REST API, swappable pieces.
 app/
   config.py            settings from .env
   database.py           SQLAlchemy engine/session
-  models.py              Trade, BotSession tables
-  strategies/            swap strategies without touching the runner
+  models.py              Trade, BotSession, PriceTick tables
+  auth.py                 API key authentication
+  strategies/             swap strategies without touching the runner
     ema_rsi.py
-  broker/                paper vs live, same interface
+    mean_reversion.py
+    volume_confirmed.py
+  broker/                 paper vs live, same interface
     paper_broker.py
     angel_broker.py
-  data_feed/              simulated vs real price feeds
-  backtest/               run a strategy over historical prices, get real metrics
-  bot_runner.py           background thread that runs the live loop
-  api/routes.py           REST endpoints
-main.py                   FastAPI app entrypoint
+  data_feed/               simulated vs real price feeds
+  backtest/
+    engine.py               core backtest simulation loop
+    costs.py                 real Indian intraday trading cost model
+    portfolio_stats.py       statistical significance testing
+    historical_data.py       Yahoo Finance data fetching
+  screener/
+    candidates.py             momentum/valuation research screener
+    long_term.py               multi-period trailing return screener
+    nse_universe.py            full NSE master list loader
+  bot_runner.py            background thread running the live loop
+  api/routes.py            REST endpoints
+frontend/index.html        dashboard (candlestick charts, screener, modal)
+tests/                      17 automated tests
+main.py                     FastAPI app entrypoint
+STRATEGY_EVALUATION.md      full findings write-up
 ```
 
 ## Setup
+
+### Option A: Docker (recommended)
+
+```bash
+cp .env.example .env    # fill in values, see below
+docker-compose up --build
+```
+
+### Option B: Local Python
 
 ```bash
 python -m venv venv
@@ -32,51 +108,48 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` — full interactive API, same idea as
-DRF's browsable API on BookIQ.
+Either way, open `http://127.0.0.1:8000/dashboard/`.
 
-## Dashboard
+### Required setup for the full stock screener
 
-Open `http://127.0.0.1:8000/dashboard/` for the full UI — candlestick chart
-(TradingView's Lightweight Charts), a live watchlist screener, and the trade
-log. Click a symbol in the sidebar to chart it. Start/stop the bot right
-from the page.
+Download NSE's official equity list and save it as `data/EQUITY_L.csv`:
+```
+https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
+```
 
-## Endpoints
+## Running tests
 
-- `POST /api/bot/start?symbols=SBIFUNDS,RELIANCE,TCS&strategy=ema_rsi&tick_seconds=2` — starts paper trading a watchlist in the background. Omit `symbols` for the default 5-stock watchlist.
-- `GET /api/bot/status` — cash, positions, portfolio value, running state
-- `POST /api/bot/stop`
-- `GET /api/watchlist/screener` — ranks the watchlist by recent momentum + shows each symbol's live signal. This is the honest "best stock" finder: not a prediction, just which symbols are moving and what the strategy currently says about them.
-- `GET /api/prices/{symbol}/candles?interval_seconds=5&limit=100` — OHLC candles aggregated from raw price ticks, powers the chart
-- `GET /api/trades` — full trade history from the DB
-- `GET /api/sessions` — every bot run, for comparing strategies over time
-- `POST /api/backtest?strategy=ema_rsi&num_ticks=2000` — run a strategy over historical-style data, get win rate / drawdown / return
+```bash
+pip install pytest
+python -m pytest tests/ -v
+```
 
-## What's real vs what's a placeholder right now
+17 tests covering cost math, position sizing, and strategy signal logic.
+Runs automatically on every push via GitHub Actions.
 
-**Real and tested:** the full pipeline — strategy decides, broker fills,
-trade writes to SQLite, backtest reports honest metrics. I ran this
-end-to-end before handing it to you.
+## API
 
-**Placeholder, and this is the actual next milestone:** `/api/backtest`
-currently runs on simulated random-walk prices, not real market history.
-A strategy that looks fine on random data means nothing — the real test
-is running it against actual NSE historical candles (Angel One's
-historical data API gives you this). That's the next thing to build,
-and it's the honest answer to "will this make money" — not something
-the architecture can promise on its own.
+Full interactive docs at `/docs` once running. Key endpoints:
 
-## Going live
+- `POST /api/bot/start` / `POST /api/bot/stop` — control the paper trading loop
+- `GET /api/watchlist/screener` — live momentum screener on the active watchlist
+- `POST /api/backtest/historical` — backtest a strategy on real historical data
+- `POST /api/backtest/significance` — pooled statistical significance test
+- `GET /api/discover/long-term` — multi-period trailing return screener
+- `GET /api/discover/universe-batch` — paginated scan of the full NSE universe
 
-Same as before: fill in Angel One credentials in `.env`, set `BOT_MODE=live`,
-add real instrument tokens to `angel_broker.py` calls. Don't do this until
-a strategy has backtested well on real historical data — not simulated data.
+## Going live (real money) — not currently recommended
 
-## Roadmap (good portfolio + good bot, in order)
+`app/broker/angel_broker.py` implements the real Angel One Smart API for
+when/if a strategy passes rigorous validation. As of this write-up, none
+has — see [STRATEGY_EVALUATION.md](./STRATEGY_EVALUATION.md) for the full
+statistical case. Don't flip `BOT_MODE=live` without running the
+significance test framework against your specific strategy and getting a
+real, statistically significant positive result first.
 
-1. Pull real historical candles from Angel One, backtest against those (this is the big one)
-2. Stop-loss / position sizing (risk max X% of capital per trade)
-3. A second strategy to compare against EMA/RSI (mean reversion is a natural next test)
-4. Simple dashboard (Streamlit or a small React frontend) showing live P&L
-5. Multi-symbol watchlist instead of one hardcoded symbol
+## Disclaimer
+
+This project is for educational and portfolio purposes. Nothing here is
+investment advice. Past backtested performance does not predict future
+results. No strategy in this repository is currently validated for live
+trading with real capital.
