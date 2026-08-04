@@ -98,6 +98,12 @@
   <span id="statusPill" class="status-pill stopped">Stopped</span>
 </header>
 
+<div id="demoKeyBanner" style="background: rgba(79,140,255,0.1); border-bottom: 1px solid var(--accent); padding: 8px 24px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px;">
+  <span>🔑 Public demo — this is a paper-trading portfolio project (no real money, no personal data). Demo API key:</span>
+  <code id="demoKeyValue" style="background: var(--panel); padding: 2px 8px; border-radius: 4px; color: var(--text); font-family: monospace;">a34f179df723787a807717940a330d9284b21c0f70031fc2defddd8ac9b4d7dd</code>
+  <button id="useDemoKeyBtn" style="padding: 3px 10px; font-size: 11px;">Use this key</button>
+</div>
+
 <div class="tabs">
   <button class="tab-btn active" data-tab="bot">Bot Dashboard</button>
   <button class="tab-btn" data-tab="screener">Stock Screener</button>
@@ -206,6 +212,14 @@ document.getElementById('apiBase').textContent = API;
 function getApiKey() {
   return localStorage.getItem('tradebot_api_key') || '';
 }
+
+document.getElementById('useDemoKeyBtn').addEventListener('click', () => {
+  const key = document.getElementById('demoKeyValue').textContent.trim();
+  localStorage.setItem('tradebot_api_key', key);
+  document.getElementById('demoKeyBanner').innerHTML =
+    '<span style="color: var(--green);">✓ Demo key saved - reloading...</span>';
+  setTimeout(() => location.reload(), 600);
+});
 
 let pendingKeyPrompt = null;  // shared across simultaneous requests so 3 parallel 401s don't stack 3 dialogs
 
