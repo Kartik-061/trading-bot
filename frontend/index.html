@@ -198,6 +198,48 @@
 const API = window.location.origin;
 document.getElementById('apiBase').textContent = API;
 
+// ============ API KEY HANDLING ============
+// If the backend has API_KEY set (production/deployed), every request needs
+// an X-API-Key header or it gets rejected with 401. Stored in localStorage
+// so you only enter it once per browser - this is our own app's frontend,
+// not a sandboxed artifact, so localStorage is the right tool here.
+function getApiKey() {
+  return localStorage.getItem('tradebot_api_key') || '';
+}
+
+let pendingKeyPrompt = null;  // shared across simultaneous requests so 3 parallel 401s don't stack 3 dialogs
+
+async function promptForApiKey() {
+  if (pendingKeyPrompt) return pendingKeyPrompt;  // another call already asking - wait on that one
+
+  pendingKeyPrompt = new Promise((resolve) => {
+    const entered = prompt('This server requires an API key. Enter it (saved for next time):');
+    if (entered) localStorage.setItem('tradebot_api_key', entered);
+    resolve(entered);
+  });
+
+  const result = await pendingKeyPrompt;
+  pendingKeyPrompt = null;
+  return result;
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const key = getApiKey();
+  if (key) headers['X-API-Key'] = key;
+
+  let res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401) {
+    const entered = await promptForApiKey();
+    if (entered) {
+      headers['X-API-Key'] = entered;
+      res = await fetch(url, { ...options, headers });
+    }
+  }
+  return res;
+}
+
 // ============ TAB SWITCHING ============
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -234,13 +276,13 @@ async function startBot() {
   const tick = document.getElementById('tickSeconds').value || 2;
   const params = new URLSearchParams({ tick_seconds: tick });
   if (symbols) params.set('symbols', symbols);
-  const res = await fetch(`${API}/api/bot/start?${params}`, { method: 'POST' });
+  const res = await apiFetch(`${API}/api/bot/start?${params}`, { method: 'POST' });
   const data = await res.json();
   if (data.status) { startPolling(); } else { alert('Start failed: ' + (data.reason || 'unknown')); }
 }
 
 async function stopBot() {
-  await fetch(`${API}/api/bot/stop`, { method: 'POST' });
+  await apiFetch(`${API}/api/bot/stop`, { method: 'POST' });
   stopPolling();
   document.getElementById('statusPill').textContent = 'Stopped';
   document.getElementById('statusPill').className = 'status-pill stopped';
@@ -250,7 +292,7 @@ function startPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = s
 function stopPolling() { if (pollTimer) clearInterval(pollTimer); }
 
 async function refreshAll() {
-  const statusRes = await fetch(`${API}/api/bot/status`);
+  const statusRes = await apiFetch(`${API}/api/bot/status`);
   const status = await statusRes.json();
   const pill = document.getElementById('statusPill');
   if (status.running) {
@@ -262,18 +304,18 @@ async function refreshAll() {
     pill.textContent = 'Stopped'; pill.className = 'status-pill stopped';
   }
 
-  const screenerRes = await fetch(`${API}/api/watchlist/screener`);
+  const screenerRes = await apiFetch(`${API}/api/watchlist/screener`);
   const screener = await screenerRes.json();
   renderWatchlist(screener.results || []);
 
   if (selectedSymbol) {
     document.getElementById('selectedSymbol').textContent = selectedSymbol;
-    const candlesRes = await fetch(`${API}/api/prices/${selectedSymbol}/candles?interval_seconds=3&limit=200`);
+    const candlesRes = await apiFetch(`${API}/api/prices/${selectedSymbol}/candles?interval_seconds=3&limit=200`);
     const candles = await candlesRes.json();
     if (candles.length) candleSeries.setData(candles);
   }
 
-  const tradesRes = await fetch(`${API}/api/trades?limit=25`);
+  const tradesRes = await apiFetch(`${API}/api/trades?limit=25`);
   const trades = await tradesRes.json();
   renderTrades(trades);
 }
@@ -317,7 +359,7 @@ async function runDiscover() {
   const btn = document.getElementById('discoverBtn');
   btn.disabled = true; btn.textContent = 'Scanning...';
   try {
-    const res = await fetch(`${API}/api/discover?limit=10`);
+    const res = await apiFetch(`${API}/api/discover?limit=10`);
     if (!res.ok) throw new Error('Server error: ' + res.status);
     const data = await res.json();
     renderDiscover(data.candidates || []);
@@ -364,7 +406,7 @@ async function loadPage(offset) {
   status.textContent = `Fetching stocks ${offset}-${offset + 50}... (~20-40s, real history per stock)`;
 
   try {
-    const res = await fetch(`${API}/api/discover/universe-batch?offset=${offset}&batch_size=50&rank_by=1y`);
+    const res = await apiFetch(`${API}/api/discover/universe-batch?offset=${offset}&batch_size=50&rank_by=1y`);
     const data = await res.json();
 
     if (data.status === false) {
@@ -483,7 +525,7 @@ async function openStockDetail(symbol) {
   const chartEl = document.getElementById('modalChart');
   chartEl.innerHTML = '<p style="color: var(--muted); padding: 20px;">Loading chart...</p>';
   try {
-    const res = await fetch(`${API}/api/discover/stock-chart/${symbol}?period=1y`);
+    const res = await apiFetch(`${API}/api/discover/stock-chart/${symbol}?period=1y`);
     const data = await res.json();
     if (data.status === false || !data.candles || !data.candles.length) {
       chartEl.innerHTML = `<p style="color: var(--red); padding: 20px;">Chart unavailable: ${data.reason || 'no data'}</p>`;

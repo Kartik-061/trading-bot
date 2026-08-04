@@ -27,6 +27,10 @@ class Settings:
     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
 
+    # API auth - if left empty, auth is skipped (convenient for local dev).
+    # MUST be set to a real random value before deploying anywhere public.
+    API_KEY = os.getenv("API_KEY", "")
+
     @classmethod
     def validate_for_live(cls):
         missing = [

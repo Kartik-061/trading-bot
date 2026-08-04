@@ -20,7 +20,9 @@ from app.screener.nse_universe import get_universe_batch
 from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv, fetch_ohlc_for_chart
 from app.backtest.portfolio_stats import test_significance
 
-router = APIRouter()
+from app.auth import verify_api_key
+
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 
 @router.post("/bot/start")
@@ -307,6 +309,7 @@ def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RE
     result["strategy_kwargs"] = kwargs
     return result
 
+
 @router.get("/discover/long-term")
 def discover_long_term(rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y",
                         limit: int = Query(15, gt=0, le=100)):
@@ -317,7 +320,6 @@ def discover_long_term(rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y",
     narrow down names worth your own research, not as a buy signal.
     """
     results = scan_long_term(rank_by=rank_by)
-
     return {
         "disclaimer": "Backward-looking historical performance only. Past returns over "
                        "any period do not predict future returns. Not investment advice - "
@@ -360,6 +362,7 @@ def discover_universe_batch(offset: int = Query(0, ge=0),
         "ranked_by": rank_by,
         "candidates": results,
     }
+
 
 @router.get("/discover/stock-chart/{symbol}")
 def stock_chart(symbol: str, period: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"] = "1y"):
