@@ -56,6 +56,8 @@ is the actual point of this project.
 - **Dockerized**, deployed live on Render
 - API key auth + rate limiting
 
+![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)
+
 ## Structure
 
 ```
