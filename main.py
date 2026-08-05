@@ -10,9 +10,11 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from app.rate_limit import limiter
 
 from app.database import Base, engine
 from app.api.routes import router
@@ -25,13 +27,14 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Trading Bot API", version="0.1.0")
 
-# Rate limiting - keyed by IP address. Default limit applies to every route
-# unless overridden per-endpoint. This matters most for the yfinance-backed
-# endpoints (screener, backtest) - Yahoo Finance itself rate-limits, and a
-# runaway client hammering our API could get OUR server's IP blocked by them.
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+# Rate limiting - explicit @limiter.limit() decorators are applied to the
+# expensive, Yahoo-Finance-backed endpoints in routes.py. A router-level
+# auth dependency breaks slowapi's automatic default_limits mechanism (a
+# known interaction quirk), so explicit per-route decorators are used
+# instead - verified working even with the auth dependency present.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

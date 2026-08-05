@@ -19,6 +19,8 @@ from datetime import timedelta
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.cache import ttl_cache
+
 
 def _clean(val):
     """NaN/inf aren't valid, honest data - convert to None. Some sources
@@ -64,6 +66,7 @@ PERIOD_WINDOWS_TRADING_DAYS = {
 PER_TICKER_TIMEOUT_SECONDS = 8
 
 
+@ttl_cache(ttl_seconds=900)
 def fetch_multi_period(symbol: str) -> dict:
     """
     Pulls 2 years of daily closes ONCE, computes trailing return over every

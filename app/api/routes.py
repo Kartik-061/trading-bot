@@ -4,7 +4,7 @@ REST endpoints, same shape as BookIQ's DRF views: thin controllers,
 real logic lives in bot_runner / backtest / broker modules.
 """
 from typing import Optional, Literal
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -21,6 +21,7 @@ from app.backtest.historical_data import fetch_historical_closes, fetch_historic
 from app.backtest.portfolio_stats import test_significance
 
 from app.auth import verify_api_key
+from app.rate_limit import limiter
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -122,7 +123,8 @@ def list_sessions(db: Session = Depends(get_db)):
 
 
 @router.get("/discover")
-def discover(limit: int = Query(10, gt=0, le=100)):
+@limiter.limit("10/minute")
+def discover(request: Request, limit: int = Query(10, gt=0, le=100)):
     """
     Scans a wider universe of NSE stocks for research purposes: real momentum
     and valuation data, ranked transparently. NOT investment advice, NOT a
@@ -169,7 +171,8 @@ def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
 
 
 @router.post("/backtest/historical")
-def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
+@limiter.limit("10/minute")
+def backtest_historical(request: Request, strategy: str = "ema_rsi", symbol: str = "RELIANCE",
                          interval: str = "5m", period: str = "60d",
                          starting_capital: float = Query(100000, gt=0)):
     """
@@ -205,7 +208,8 @@ def backtest_historical(strategy: str = "ema_rsi", symbol: str = "RELIANCE",
 
 
 @router.post("/backtest/batch")
-def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
+@limiter.limit("5/minute")
+def backtest_batch(request: Request, symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
                     interval: str = "5m", period: str = "60d",
                     starting_capital: float = Query(100000, gt=0)):
     """
@@ -264,7 +268,8 @@ def backtest_batch(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
 
 
 @router.post("/backtest/significance")
-def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
+@limiter.limit("5/minute")
+def backtest_significance(request: Request, strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK",
                            interval: str = "5m", period: str = "60d",
                            starting_capital: float = Query(100000, gt=0),
                            ema_short: int = None, ema_long: int = None,
@@ -311,7 +316,8 @@ def backtest_significance(strategy: str = "ema_rsi", symbols: str = "SBIFUNDS,RE
 
 
 @router.get("/discover/long-term")
-def discover_long_term(rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y",
+@limiter.limit("10/minute")
+def discover_long_term(request: Request, rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y",
                         limit: int = Query(15, gt=0, le=100)):
     """
     Ranks a wide universe of NSE stocks (large + mid cap, 42 names) by
@@ -330,7 +336,8 @@ def discover_long_term(rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y",
 
 
 @router.get("/discover/universe-batch")
-def discover_universe_batch(offset: int = Query(0, ge=0),
+@limiter.limit("5/minute")
+def discover_universe_batch(request: Request, offset: int = Query(0, ge=0),
                              batch_size: int = Query(50, gt=0, le=500),
                              rank_by: Literal["3mo", "6mo", "1y", "2y"] = "1y"):
     """
@@ -365,7 +372,8 @@ def discover_universe_batch(offset: int = Query(0, ge=0),
 
 
 @router.get("/discover/stock-chart/{symbol}")
-def stock_chart(symbol: str, period: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"] = "1y"):
+@limiter.limit("15/minute")
+def stock_chart(request: Request, symbol: str, period: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"] = "1y"):
     """
     Full OHLC candles for one stock, for the long-term screener's
     click-to-view-detail chart.
