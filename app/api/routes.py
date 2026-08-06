@@ -384,3 +384,17 @@ def stock_chart(request: Request, symbol: str, period: Literal["1mo", "3mo", "6m
         return {"status": False, "reason": str(e)}
 
     return {"symbol": symbol.upper(), "period": period, "candles": candles}
+
+from app.services.price_feed import get_live_price, get_live_prices_bulk
+
+@router.get("/prices/{symbol}/live")
+def live_price(symbol: str):
+    """Real (delayed ~15-20min) price from Yahoo Finance. No credentials needed."""
+    return get_live_price(symbol.upper())
+
+
+@router.get("/prices/live")
+def live_prices_bulk(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK"):
+    """Same as above but for multiple symbols, comma-separated."""
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    return get_live_prices_bulk(symbol_list)
