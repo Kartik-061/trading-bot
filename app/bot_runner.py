@@ -16,6 +16,8 @@ from app.broker.paper_broker import PaperBroker
 from app.data_feed.feeds import SimulatedFeed
 from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
+from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
+from app.services.price_feed import get_live_price
 
 logger = logging.getLogger("bot_runner")
 
@@ -55,6 +57,17 @@ DEFAULT_WATCHLIST = {
     "HDFCBANK": 1650.0,
 }
 
+class YahooLiveFeed:
+    """Same interface as SimulatedFeed/AngelLiveFeed (.get_price, .prices dict),
+    backed by real (delayed) Yahoo Finance data instead of a random walk."""
+    def __init__(self, symbols: list):
+        self.prices = {}
+
+    def get_price(self, symbol: str) -> float:
+        data = get_live_price(symbol)
+        price = data["last_price"]
+        self.prices[symbol] = price
+        return price
 
 class BotRunner:
     """Singleton-ish controller. One bot run at a time, tracking a watchlist."""
@@ -110,8 +123,11 @@ class BotRunner:
         self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, "ema_rsi")
         self.broker.connect()
 
-        seed_prices = {sym: DEFAULT_WATCHLIST.get(sym, 500.0) for sym in self.symbols}
-        self.feed = SimulatedFeed(seed_prices)
+        if settings.MODE == "live" or getattr(settings, "MODE", "paper") == "paper":
+            self.feed = YahooLiveFeed(self.symbols)
+        else:
+            seed_prices = {sym: DEFAULT_WATCHLIST.get(sym, 500.0) for sym in self.symbols}
+            self.feed = SimulatedFeed(seed_prices)
 
         try:
             while self.running:
