@@ -48,8 +48,15 @@ def run_backtest(strategy, prices: list, starting_capital: float = 100000,
     max_drawdown = 0.0
     total_costs = 0.0
 
-    for price in prices:
-        signal = strategy.decide(price, holding_qty)
+    for tick in prices:
+        if isinstance(tick, dict):
+            price = tick["close"]
+            volume = tick.get("volume")
+        else:
+            price = tick
+            volume = None
+
+        signal = strategy.decide(price, holding_qty, volume=volume)
 
         if signal == "BUY" and holding_qty == 0:
             trade_qty = qty if qty is not None else max(
