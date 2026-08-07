@@ -19,6 +19,7 @@ from app.rate_limit import limiter
 from app.database import Base, engine
 from app.api.routes import router
 from app.config import settings
+from app.routes_auth import auth_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -26,6 +27,7 @@ logger = logging.getLogger("main")
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Trading Bot API", version="0.1.0")
+app.include_router(auth_router, prefix="/api")
 
 # Rate limiting - explicit @limiter.limit() decorators are applied to the
 # expensive, Yahoo-Finance-backed endpoints in routes.py. A router-level

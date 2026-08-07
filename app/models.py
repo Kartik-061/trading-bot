@@ -51,3 +51,15 @@ class BotSession(Base):
     final_value = Column(Float, nullable=True)
     is_live = Column(Boolean, default=False)
     status = Column(String, default="running")  # running / stopped / crashed
+
+class User(Base):
+    """Real user accounts, Phase 1 of moving from single-shared-bot to
+    per-user portfolios. Phase 2 will add user_id foreign keys to Trade
+    and BotSession once this is tested and stable."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)

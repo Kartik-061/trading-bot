@@ -13,6 +13,10 @@ class Settings:
     # Mode
     MODE = os.getenv("BOT_MODE", "paper").lower()  # "paper" or "live"
 
+    JWT_SECRET = os.getenv("JWT_SECRET", "")
+    JWT_ALGORITHM = "HS256"
+    JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24h default
+
     # Angel One
     ANGEL_API_KEY = os.getenv("ANGEL_API_KEY", "")
     ANGEL_CLIENT_ID = os.getenv("ANGEL_CLIENT_ID", "")

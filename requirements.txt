@@ -9,3 +9,7 @@ pandas>=2.2.3
 requests==2.32.3
 yfinance>=0.2.40
 slowapi>=0.1.10
+passlib[bcrypt]
+python-jose[cryptography]
+email-validator
+bcrypt==4.0.1
