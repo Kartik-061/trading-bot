@@ -15,6 +15,7 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     symbol = Column(String, index=True)
     side = Column(String)          # "BUY" or "SELL"
@@ -43,6 +44,7 @@ class BotSession(Base):
     __tablename__ = "bot_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     ended_at = Column(DateTime, nullable=True)
     symbol = Column(String)

@@ -13,13 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from app.bot_runner import bot_runner
+from app.bot_runner import user_bot_manager
 from app.rate_limit import limiter
 
 from app.database import Base, engine
 from app.api.routes import router
 from app.config import settings
 from app.routes_auth import auth_router
+from app.routes_user_bot import user_bot_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -28,6 +29,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Trading Bot API", version="0.1.0")
 app.include_router(auth_router, prefix="/api")
+app.include_router(user_bot_router, prefix="/api")
 
 # Rate limiting - explicit @limiter.limit() decorators are applied to the
 # expensive, Yahoo-Finance-backed endpoints in routes.py. A router-level
@@ -100,23 +102,3 @@ def health_check():
     """Simple liveness check - useful for Docker healthchecks or a future
     deploy platform (Render, etc) to confirm the app actually booted."""
     return {"status": "ok", "mode": settings.MODE}
-
-@app.on_event("startup")
-async def auto_start_bot():
-    """
-    Render restarts (redeploys, crashes, free-tier spin-down/wake) reset
-    BotRunner's in-memory state to stopped. Without this, every restart
-    silently kills paper-trading data collection until someone notices
-    and manually calls /bot/start again - which already happened once
-    today. This makes the bot self-healing instead.
-    """
-    import logging
-    logger = logging.getLogger("startup")
-    try:
-        result = bot_runner.start(strategy_name="mean_reversion")
-        if result.get("status"):
-            logger.info(f"Auto-started bot on boot: session_id={result.get('session_id')}")
-        else:
-            logger.info(f"Bot auto-start skipped: {result.get('reason')}")
-    except Exception as e:
-        logger.exception(f"Bot auto-start failed: {e}")

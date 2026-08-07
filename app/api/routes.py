@@ -10,7 +10,7 @@ from sqlalchemy import desc
 
 from app.database import get_db
 from app.models import Trade, BotSession, PriceTick
-from app.bot_runner import bot_runner
+from app.bot_runner import user_bot_manager
 from app.backtest.engine import run_backtest
 from app.strategies import STRATEGY_REGISTRY
 from app.data_feed.feeds import SimulatedFeed
@@ -31,14 +31,14 @@ def start_bot(symbols: Optional[str] = None, strategy: str = "ema_rsi",
               tick_seconds: float = Query(2, gt=0, le=300)):
     """symbols: comma-separated, e.g. 'SBIFUNDS,RELIANCE,TCS'. Omit to use the default watchlist."""
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
-    return bot_runner.start(symbols=symbol_list, strategy_name=strategy, tick_seconds=tick_seconds)
+    return user_bot_manager.start(symbols=symbol_list, strategy_name=strategy, tick_seconds=tick_seconds)
 
 
 @router.get("/watchlist/screener")
 def screener():
     """Ranks the watchlist by recent momentum + current signal. Honest 'best stock' finder -
     not a prediction, just which symbols are moving and what the strategy currently says."""
-    return bot_runner.screener()
+    return user_bot_manager.screener()
 
 
 @router.get("/prices/{symbol}/candles")
@@ -86,12 +86,12 @@ def get_candles(symbol: str, interval_seconds: int = Query(5, gt=0, le=3600),
 
 @router.post("/bot/stop")
 def stop_bot():
-    return bot_runner.stop()
+    return user_bot_manager.stop()
 
 
 @router.get("/bot/status")
 def bot_status():
-    return bot_runner.status()
+    return user_bot_manager.status()
 
 
 @router.get("/trades")

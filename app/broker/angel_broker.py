@@ -17,11 +17,15 @@ logger = logging.getLogger("angel_broker")
 
 
 class AngelBroker(BaseBroker):
-    def __init__(self, db: Session, strategy_name: str = "ema_rsi"):
+    def __init__(self, db: Session, starting_capital: float, strategy_name: str = "ema_rsi",
+                 user_id: int = None, max_concurrent_positions: int = 5):
         self.db = db
+        self.cash = starting_capital
+        self.starting_capital = starting_capital
+        self.positions = {}
         self.strategy_name = strategy_name
-        self.smart_api = None
-        self._holdings_cache = {}
+        self.user_id = user_id
+        self.max_concurrent_positions = max_concurrent_positions
 
     def connect(self):
         from SmartApi import SmartConnect
@@ -46,18 +50,18 @@ class AngelBroker(BaseBroker):
 
     def place_order(self, symbol: str, side: str, qty: int, price: float,
                      token: str = "", exchange: str = "NSE") -> dict:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": symbol,
-            "symboltoken": token,
-            "transactiontype": side,
-            "exchange": exchange,
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "price": 0,
-            "quantity": qty,
-        }
+        trade = Trade(
+            timestamp=datetime.utcnow(),
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            price=price,
+            value=round(cost, 2),
+            cash_after=round(self.cash, 2),
+            is_live=False,
+            strategy_name=self.strategy_name,
+            user_id=self.user_id,
+        )
         response = self.smart_api.placeOrder(order_params)
         status = bool(response.get("status", False)) if isinstance(response, dict) else False
 

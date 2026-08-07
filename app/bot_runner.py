@@ -70,18 +70,18 @@ class YahooLiveFeed:
         return price
 
 class BotRunner:
-    """Singleton-ish controller. One bot run at a time, tracking a watchlist."""
-
-    def __init__(self):
+    def __init__(self, user_id: int = None):
+        self.user_id = user_id
         self.thread = None
         self.running = False
         self.session_id = None
         self.broker = None
         self.feed = None
-        self.strategies = {}   # symbol -> strategy instance
+        self.strategies = {}
         self.symbols = []
+        self.strategy_name = "ema_rsi"
         self.tick_seconds = 2
-        self.last_signal = {}  # symbol -> "BUY"/"SELL"/"HOLD"
+        self.last_signal = {}
 
     def start(self, symbols: list = None, strategy_name: str = "ema_rsi", tick_seconds: float = 2):
         if self.running:
@@ -101,6 +101,7 @@ class BotRunner:
             starting_capital=settings.PAPER_STARTING_CAPITAL,
             is_live=(settings.MODE == "live"),
             status="running",
+            user_id=self.user_id,
         )
         db.add(bot_session)
         db.commit()
@@ -109,6 +110,7 @@ class BotRunner:
         db.close()
 
         self.symbols = symbols
+        self.strategy_name = strategy_name
         self.strategies = {sym: strategy_cls() for sym in symbols}
         self.tick_seconds = tick_seconds
         self.last_signal = {sym: "HOLD" for sym in symbols}
@@ -120,14 +122,10 @@ class BotRunner:
 
     def _run_loop(self):
         db = SessionLocal()
-        self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, "ema_rsi", max_concurrent_positions=5)
+        self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, self.strategy_name, user_id=self.user_id)
         self.broker.connect()
 
-        if settings.MODE == "live" or getattr(settings, "MODE", "paper") == "paper":
-            self.feed = YahooLiveFeed(self.symbols)
-        else:
-            seed_prices = {sym: DEFAULT_WATCHLIST.get(sym, 500.0) for sym in self.symbols}
-            self.feed = SimulatedFeed(seed_prices)
+        self.feed = YahooLiveFeed(self.symbols)
 
         try:
             while self.running:
@@ -137,20 +135,16 @@ class BotRunner:
                     continue
                 for symbol in self.symbols:
                     price = self.feed.get_price(symbol)
-
                     db.add(PriceTick(timestamp=datetime.utcnow(), symbol=symbol, price=price))
-
                     holding = self.broker.get_holding_qty(symbol)
                     signal = self.strategies[symbol].decide(price, holding)
                     self.last_signal[symbol] = signal
-
                     if signal in ("BUY", "SELL"):
                         self.broker.place_order(symbol, signal, settings.DEFAULT_QTY, price)
-
                 db.commit()
                 time.sleep(self.tick_seconds)
         except Exception as e:
-            logger.exception(f"Bot loop crashed: {e}")
+            logger.exception(f"Bot loop crashed (user_id={self.user_id}): {e}")
             self._finalize(db, status="crashed")
             db.close()
             return
@@ -223,4 +217,37 @@ class BotRunner:
         return {"running": True, "results": results}
 
 
-bot_runner = BotRunner()
+class UserBotManager:
+    """One BotRunner instance per logged-in user - full portfolio isolation.
+    Trade-off worth knowing: each active user's bot polls Yahoo Finance
+    independently, so API call volume scales with concurrent active users.
+    Fine for a handful of real users; would need a real shared-price-cache
+    refactor before this scales to hundreds of simultaneous traders."""
+    def __init__(self):
+        self._runners = {}
+
+    def get_runner(self, user_id: int) -> BotRunner:
+        if user_id not in self._runners:
+            self._runners[user_id] = BotRunner(user_id=user_id)
+        return self._runners[user_id]
+
+    def start(self, user_id: int, **kwargs):
+        return self.get_runner(user_id).start(**kwargs)
+
+    def stop(self, user_id: int):
+        if user_id not in self._runners:
+            return {"status": False, "reason": "not_running"}
+        return self._runners[user_id].stop()
+
+    def status(self, user_id: int):
+        if user_id not in self._runners:
+            return {"running": False, "market_open": is_market_open()}
+        return self._runners[user_id].status()
+
+    def screener(self, user_id: int):
+        if user_id not in self._runners:
+            return {"running": False, "results": []}
+        return self._runners[user_id].screener()
+
+
+user_bot_manager = UserBotManager()
