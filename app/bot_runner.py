@@ -18,6 +18,7 @@ from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
 from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
 from app.services.price_feed import get_live_price
+from app.bot_runner import bot_runner
 
 logger = logging.getLogger("bot_runner")
 

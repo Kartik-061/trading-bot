@@ -98,3 +98,23 @@ def health_check():
     """Simple liveness check - useful for Docker healthchecks or a future
     deploy platform (Render, etc) to confirm the app actually booted."""
     return {"status": "ok", "mode": settings.MODE}
+
+@app.on_event("startup")
+async def auto_start_bot():
+    """
+    Render restarts (redeploys, crashes, free-tier spin-down/wake) reset
+    BotRunner's in-memory state to stopped. Without this, every restart
+    silently kills paper-trading data collection until someone notices
+    and manually calls /bot/start again - which already happened once
+    today. This makes the bot self-healing instead.
+    """
+    import logging
+    logger = logging.getLogger("startup")
+    try:
+        result = bot_runner.start(strategy_name="mean_reversion")
+        if result.get("status"):
+            logger.info(f"Auto-started bot on boot: session_id={result.get('session_id')}")
+        else:
+            logger.info(f"Bot auto-start skipped: {result.get('reason')}")
+    except Exception as e:
+        logger.exception(f"Bot auto-start failed: {e}")
