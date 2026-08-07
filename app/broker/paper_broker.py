@@ -16,12 +16,14 @@ logger = logging.getLogger("paper_broker")
 
 
 class PaperBroker(BaseBroker):
-    def __init__(self, db: Session, starting_capital: float, strategy_name: str = "ema_rsi"):
+    def __init__(self, db: Session, starting_capital: float, strategy_name: str = "ema_rsi",
+                 max_concurrent_positions: int = 5):
         self.db = db
         self.cash = starting_capital
         self.starting_capital = starting_capital
         self.positions = {}  # symbol -> {"qty": int, "avg_price": float}
         self.strategy_name = strategy_name
+        self.max_concurrent_positions = max_concurrent_positions
 
     def connect(self):
         logger.info(f"Paper broker ready. Starting capital: Rs.{self.cash:,.2f}")
@@ -33,14 +35,13 @@ class PaperBroker(BaseBroker):
         cost = qty * price
 
         if side == "BUY":
+            open_positions = sum(1 for pos in self.positions.values() if pos["qty"] > 0)
+            already_holding = self.positions.get(symbol, {"qty": 0})["qty"] > 0
+            if not already_holding and open_positions >= self.max_concurrent_positions:
+                return {"status": False, "reason": "max_concurrent_positions_reached"}
+
             if cost > self.cash:
                 return {"status": False, "reason": "insufficient_funds"}
-            self.cash -= cost
-            pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
-            new_qty = pos["qty"] + qty
-            pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + cost) / new_qty
-            pos["qty"] = new_qty
-            self.positions[symbol] = pos
 
         elif side == "SELL":
             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})

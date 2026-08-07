@@ -86,7 +86,6 @@ def validate_config_on_startup():
 
 
 app.include_router(router, prefix="/api")
-app.mount("/dashboard", StaticFiles(directory="frontend", html=True), name="dashboard")
 
 
 @app.get("/")

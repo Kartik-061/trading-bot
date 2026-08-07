@@ -31,8 +31,7 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
             f"Check the symbol is correct and actively traded."
         )
 
-    return [round(float(p), 2) for p in hist["Close"].tolist()]
-
+    return [round(float(p), 2) for p in hist["Close"].tolist() if p == p]
 
 def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d") -> list:
     """
@@ -50,9 +49,10 @@ def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d
         )
 
     return [
-        {"close": round(float(row["Close"]), 2), "volume": float(row["Volume"])}
-        for _, row in hist.iterrows()
-    ]
+    {"close": round(float(row["Close"]), 2), "volume": float(row["Volume"])}
+    for _, row in hist.iterrows()
+    if row["Close"] == row["Close"]
+]
 
 
 def fetch_ohlc_for_chart(symbol: str, period: str = "1y", interval: str = "1d") -> list:

@@ -120,7 +120,7 @@ class BotRunner:
 
     def _run_loop(self):
         db = SessionLocal()
-        self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, "ema_rsi")
+        self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, "ema_rsi", max_concurrent_positions=5)
         self.broker.connect()
 
         if settings.MODE == "live" or getattr(settings, "MODE", "paper") == "paper":

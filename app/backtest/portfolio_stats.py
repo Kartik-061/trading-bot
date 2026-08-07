@@ -26,7 +26,7 @@ def test_significance(strategy_cls, strategy_kwargs: dict, symbol_data: dict,
         strategy = strategy_cls(**strategy_kwargs)
         result = run_backtest(strategy, prices, starting_capital=starting_capital)
         sell_trades = [t for t in result.trades if t["side"] == "SELL"]
-        pnls = [t["pnl"] for t in sell_trades]
+        pnls = [t["pnl"] for t in sell_trades if t["pnl"] == t["pnl"]]  # drop NaN pnls
         all_trade_pnls.extend(pnls)
         per_symbol[symbol] = {
             "total_return_pct": result.total_return_pct,
