@@ -299,7 +299,7 @@ def backtest_significance(request: Request, strategy: str = "ema_rsi", symbols: 
 
     for symbol in symbol_list:
         try:
-            if strategy == "volume_confirmed":
+            if strategy == "volume_confirmed" or strategy == "breakout":
                 symbol_data[symbol] = fetch_historical_ohlcv(symbol, interval=interval, period=period)
             else:
                 symbol_data[symbol] = fetch_historical_closes(symbol, interval=interval, period=period)
