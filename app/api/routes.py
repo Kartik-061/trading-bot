@@ -398,3 +398,22 @@ def live_prices_bulk(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK"):
     """Same as above but for multiple symbols, comma-separated."""
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
     return get_live_prices_bulk(symbol_list)
+
+@router.get("/discover/stock-info/{symbol}")
+@limiter.limit("15/minute")
+def stock_info(request: Request, symbol: str):
+    """Basic fundamentals for stock research - separate from fast_info-based
+    live prices since .info is heavier; rate-limited accordingly."""
+    import yfinance as yf
+    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+    info = ticker.info
+    return {
+        "symbol": symbol.upper(),
+        "name": info.get("longName"),
+        "sector": info.get("sector"),
+        "market_cap": info.get("marketCap"),
+        "pe_ratio": info.get("trailingPE"),
+        "52_week_high": info.get("fiftyTwoWeekHigh"),
+        "52_week_low": info.get("fiftyTwoWeekLow"),
+        "dividend_yield": info.get("dividendYield"),
+    }
