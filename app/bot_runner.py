@@ -178,12 +178,19 @@ class BotRunner:
 
     def status(self):
         if not self.running or not self.broker:
-            return {"running": False}
+            return {"running": False, "market_open": is_market_open()}
         latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+        db = SessionLocal()
+        bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
+        started_at = bot_session.started_at.isoformat() if bot_session else None
+        db.close()
         return {
             "running": True,
             "session_id": self.session_id,
             "symbols": self.symbols,
+            "strategy": bot_session.strategy_name if bot_session else None,
+            "started_at": started_at,
+            "market_open": is_market_open(),
             "cash": self.broker.cash,
             "positions": self.broker.positions,
             "portfolio_value": self.broker.portfolio_value(latest_prices),
