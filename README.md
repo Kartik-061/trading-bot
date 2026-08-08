@@ -30,19 +30,19 @@ The significance test pools every individual trade's P&L across all symbols and 
 
 ## Architecture
 
-Alpha Terminal (React/Lovable)
-        |
-        | REST API
-        v
+Alpha Terminal (React, deployed via Lovable)
+│
+│ REST API (JWT + API-key auth)
+▼
 FastAPI backend (Render, Docker)
-        |
-        +--> Yahoo Finance (live prices)
-        |
-        +--> Neon Postgres (users, trades, sessions)
-        |
-        +--> Per-user BotRunner
-             (isolated portfolio, strategy instance,
-              paper broker - one per logged-in user)
+│
+┌───────┼────────────────┐
+▼ ▼ ▼
+Yahoo Neon Postgres Per-user BotRunner
+Finance (users, trades, (isolated portfolio,
+(live sessions) strategy instance,
+prices) paper broker —
+one per logged-in user)
 
 **Backend:** FastAPI, SQLAlchemy, JWT auth (passlib + python-jose)
 **Database:** PostgreSQL (Neon), migrated from SQLite for deploy-persistent storage
