@@ -157,7 +157,31 @@ genuinely different mechanisms remain unexplored:
    relative-strength names from the long-term screener, rather than daily
    trading. Much lower trade frequency largely avoids the cost-drag that
    sank every intraday strategy tested here.
+## Strategy roster — full results (Aug 2026)
 
+After validating `mean_reversion`, three additional strategy families were built and tested with identical rigor to check for a second, uncorrelated source of edge (per the "bot army" diversification principle — different strategy types should behave differently in the same market conditions).
+
+### Method
+Same pipeline for all four: `/api/backtest/significance` pools every individual trade's realized P&L across all symbols tested, then runs a one-sample z-test against zero. p < 0.05 is required to call a result "real" rather than noise.
+
+### Results — 15 NSE large-cap stocks, 5-year daily data
+
+| Strategy | Pooled trades | Mean P&L/trade | p-value | Verdict |
+|---|---|---|---|---|
+| `mean_reversion` | 363 | ₹133.07 | **0.0008** | **Real edge — deployed** |
+| `trend_following` | 89 | -₹23.34 | 0.63 | No edge |
+| `breakout` | 97 | -₹33.33 | 0.66 | No edge |
+| `volume_confirmed` | 80 | ₹49.01 | 0.59 | No edge |
+
+### Why the other three didn't survive
+
+- **`trend_following`** (EMA crossover + close-price-based trend-strength filter, ATR-proxy stops): roughly symmetric win/loss split across stocks, no directional lean. The strict entry condition (crossover + trend-strength confirmation on the same bar) also produced few trades per stock, but even after widening the test to 10 stocks the result stayed centered on zero.
+- **`breakout`** (52-week high + volume confirmation): the classic "catch the next big mover" pattern. 8 of 15 stocks negative, 7 positive — looks close to a coin flip once pooled, consistent with the well-known survivorship bias in momentum/breakout strategies: the winners people remember are memorable specifically because most similar setups don't work.
+- **`volume_confirmed`** (EMA/RSI crossover requiring above-average volume): 10 of 15 stocks slightly positive, but magnitudes small and inconsistent — z-score indistinguishable from noise.
+
+### Honest takeaway
+
+One validated strategy out of four rigorously tested hypotheses is the expected, correct outcome of doing this properly — not a disappointing result. Most retail strategies don't survive pooled significance testing; the value here is in having actually checked, with real trading costs included, rather than assuming a backtest-positive result means a real edge.
 ## 8. Honest Disclaimer
 
 This report reflects backtested, historical analysis only. Past
