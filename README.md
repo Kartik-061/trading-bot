@@ -36,11 +36,14 @@ Alpha Terminal (React, deployed via Lovable)
         v
 FastAPI backend (Render, Docker)
         |
-        +--> Yahoo Finance (live prices)
+        +--> 
+        Yahoo Finance (live prices)
         |
-        +--> Neon Postgres (users, trades, sessions)
+        +--> 
+        Neon Postgres (users, trades, sessions)
         |
-        +--> Per-user BotRunner
+        +--> 
+        Per-user BotRunner
              (isolated portfolio, strategy instance,
               paper broker - one per logged-in user)
 
