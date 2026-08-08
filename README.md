@@ -28,20 +28,18 @@ The significance test pools every individual trade's P&L across all symbols and 
 - **Real statistical rigor** — every strategy is pooled-tested for significance before being trusted, not judged on a single backtest run
 - **Real infrastructure** — self-healing (auto-restarts on deploy), rate-limited, deployed on Render + Neon Postgres, kept alive via scheduled health checks
 
-## Architecture
-
-┌─────────────────┐ ┌──────────────────────┐ ┌─────────────┐
-│ Alpha Terminal │◄────►│ FastAPI backend │◄────►│ Neon │
-│ (React/Lovable) │ REST │ (Render, Docker) │ │ Postgres │
-└─────────────────┘ └──────┬───────┬────────┘ └─────────────┘
-│ │
-Yahoo Finance │
-(live prices) │
-│
-Per-user BotRunner
-(isolated portfolios,
-strategy instances,
-paper broker)
+┌─────────────────┐      ┌──────────────────────┐      ┌─────────────┐
+│  Alpha Terminal  │◄────►│   FastAPI backend    │◄────►│  Neon       │
+│  (React/Lovable) │ REST │   (Render, Docker)   │      │  Postgres   │
+└─────────────────┘      └──────┬───────┬───────┘      └─────────────┘
+                                 │       │
+                          Yahoo Finance  │
+                          (live prices)  │
+                                         │
+                              Per-user BotRunner
+                              (isolated portfolios,
+                               strategy instances,
+                               paper broker)
 
 
 **Backend:** FastAPI, SQLAlchemy, JWT auth (passlib + python-jose)
