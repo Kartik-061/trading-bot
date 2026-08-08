@@ -70,11 +70,14 @@ def fetch_ohlc_for_chart(symbol: str, period: str = "1y", interval: str = "1d") 
 
     candles = []
     for ts, row in hist.iterrows():
+        o, h, l, c = row["Open"], row["High"], row["Low"], row["Close"]
+        if o != o or h != h or l != l or c != c:  # skip if any value is NaN
+            continue
         candles.append({
             "time": int(ts.timestamp()),
-            "open": round(float(row["Open"]), 2),
-            "high": round(float(row["High"]), 2),
-            "low": round(float(row["Low"]), 2),
-            "close": round(float(row["Close"]), 2),
+            "open": round(float(o), 2),
+            "high": round(float(h), 2),
+            "low": round(float(l), 2),
+            "close": round(float(c), 2),
         })
     return candles
