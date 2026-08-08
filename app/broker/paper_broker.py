@@ -17,16 +17,17 @@ logger = logging.getLogger("paper_broker")
 
 class PaperBroker(BaseBroker):
     def __init__(self, db: Session, starting_capital: float, strategy_name: str = "ema_rsi",
-                 max_concurrent_positions: int = 5):
+                 user_id: int = None, max_concurrent_positions: int = 5):
         self.db = db
         self.cash = starting_capital
         self.starting_capital = starting_capital
         self.positions = {}  # symbol -> {"qty": int, "avg_price": float}
         self.strategy_name = strategy_name
+        self.user_id = user_id
         self.max_concurrent_positions = max_concurrent_positions
 
     def connect(self):
-        logger.info(f"Paper broker ready. Starting capital: Rs.{self.cash:,.2f}")
+        logger.info(f"Paper broker ready (user_id={self.user_id}). Starting capital: Rs.{self.cash:,.2f}")
 
     def get_holding_qty(self, symbol: str) -> int:
         return self.positions.get(symbol, {"qty": 0})["qty"]
@@ -42,6 +43,13 @@ class PaperBroker(BaseBroker):
 
             if cost > self.cash:
                 return {"status": False, "reason": "insufficient_funds"}
+
+            self.cash -= cost
+            pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
+            new_qty = pos["qty"] + qty
+            pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + cost) / new_qty
+            pos["qty"] = new_qty
+            self.positions[symbol] = pos
 
         elif side == "SELL":
             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
@@ -65,11 +73,12 @@ class PaperBroker(BaseBroker):
             cash_after=round(self.cash, 2),
             is_live=False,
             strategy_name=self.strategy_name,
+            user_id=self.user_id,
         )
         self.db.add(trade)
         self.db.commit()
 
-        logger.info(f"PAPER {side} {qty} {symbol} @ Rs.{price:.2f} | Cash: Rs.{self.cash:,.2f}")
+        logger.info(f"PAPER {side} {qty} {symbol} @ Rs.{price:.2f} | Cash: Rs.{self.cash:,.2f} (user_id={self.user_id})")
         return {"status": True, "cash_after": self.cash}
 
     def portfolio_value(self, current_prices: dict) -> float:
