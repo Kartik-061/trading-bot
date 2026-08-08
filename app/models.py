@@ -65,3 +65,16 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+
+class PortfolioSnapshot(Base):
+    """One row per bot tick per user - powers the equity curve chart.
+    Written alongside PriceTick in the same loop iteration, so it shares
+    the same time granularity as your tick_seconds setting."""
+    __tablename__ = "portfolio_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
+    session_id = Column(Integer, index=True, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    portfolio_value = Column(Float)
+    cash = Column(Float)

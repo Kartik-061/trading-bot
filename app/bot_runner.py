@@ -18,6 +18,7 @@ from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
 from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
 from app.services.price_feed import get_live_price
+from app.models import BotSession, PriceTick, PortfolioSnapshot
 
 logger = logging.getLogger("bot_runner")
 
@@ -141,6 +142,15 @@ class BotRunner:
                     self.last_signal[symbol] = signal
                     if signal in ("BUY", "SELL"):
                         self.broker.place_order(symbol, signal, settings.DEFAULT_QTY, price)
+                latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+                portfolio_value = self.broker.portfolio_value(latest_prices)
+                db.add(PortfolioSnapshot(
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    timestamp=datetime.utcnow(),
+                    portfolio_value=portfolio_value,
+                    cash=self.broker.cash,
+                ))
                 db.commit()
                 time.sleep(self.tick_seconds)
         except Exception as e:

@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models import Trade, BotSession, User
 from app.auth_user import get_current_user
 from app.bot_runner import user_bot_manager
+from app.models import Trade, BotSession, User, PortfolioSnapshot
 
 user_bot_router = APIRouter()
 
@@ -67,4 +68,18 @@ def my_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_
          "starting_capital": s.starting_capital, "final_value": s.final_value,
          "status": s.status}
         for s in sessions
+    ]
+
+@user_bot_router.get("/me/portfolio/history")
+def my_portfolio_history(limit: int = Query(500, gt=0, le=5000),
+                          db: Session = Depends(get_db),
+                          current_user: User = Depends(get_current_user)):
+    """Powers the Dashboard equity curve - one point per bot tick."""
+    snapshots = (db.query(PortfolioSnapshot)
+                 .filter(PortfolioSnapshot.user_id == current_user.id)
+                 .order_by(PortfolioSnapshot.timestamp)
+                 .limit(limit).all())
+    return [
+        {"time": int(s.timestamp.timestamp()), "value": s.portfolio_value}
+        for s in snapshots
     ]
