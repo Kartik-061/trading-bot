@@ -1,157 +1,83 @@
-![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)
+# NSE Quant Desk — Algorithmic Trading Bot
 
-# Trading Bot — NSE Paper Trading, Backtesting & Research Platform
+A full-stack algorithmic trading system for NSE (Indian stock market) equities, built end-to-end: real price data, honest cost modeling, statistically validated strategy selection, and a live paper-trading engine with per-user accounts.
 
-A full-stack trading research platform for Indian equities: a paper-trading
-bot, a rigorous backtesting engine with real cost modeling and statistical
-significance testing, and a research screener covering the entire ~2,000-stock
-NSE universe.
+**Live app:** https://strat-guardian-ui.lovable.app
+**API:** https://trading-bot-s2zl.onrender.com (docs at `/docs`)
 
-**Live demo:** https://trading-bot-s2zl.onrender.com/dashboard/
-*(free-tier hosting — first load after inactivity may take ~30-60s to wake up.
-Public demo API key is shown in the dashboard banner.)*
+> Paper trading only. No real capital is connected. Research and educational project — not investment advice.
 
-**Full findings write-up:** [STRATEGY_EVALUATION.md](./STRATEGY_EVALUATION.md)
-— the honest result of testing whether simple technical strategies actually
-have edge on NSE stocks, backed by real statistical significance testing,
-not eyeballed backtests.
+## The headline result
 
----
+Of four strategies backtested with equal statistical rigor across 15 NSE large-cap stocks over 5 years, **one showed a real, statistically significant edge**:
 
-## What this actually is
+| Strategy | p-value | Verdict |
+|---|---|---|
+| **Mean reversion** | **0.0008** | **Statistically significant — deployed** |
+| Trend following | 0.63 | No edge detected |
+| Breakout (52-week high + volume) | 0.66 | No edge detected |
+| Volume-confirmed EMA/RSI | 0.59 | No edge detected |
 
-Most "AI trading bot" projects show a backtest that looks good and stop
-there. This one goes further: every strategy here was tested with real
-Indian trading costs (brokerage, STT, GST, stamp duty), proper
-capital-percentage position sizing, and a statistical significance test
-that pools every trade and asks "is this actually distinguishable from
-random chance?" — not just "did the numbers look positive on one run."
+The significance test pools every individual trade's P&L across all symbols and runs a one-sample z-test against zero — the rigorous version of "does this strategy actually work," instead of eyeballing which backtests happened to look positive. Full methodology and results in [`STRATEGY_EVALUATION.md`](./STRATEGY_EVALUATION.md).
 
-The honest result: the intraday strategies tested here do **not** show
-statistically significant edge once real costs are included (p=0.0016,
-proven negative — see the evaluation report). That's a real finding, not
-a failure to hide. The engineering discipline that produced that answer
-is the actual point of this project.
+## What makes this "real," not a demo
+
+- **Real price data** — live NSE prices via Yahoo Finance, not a random-walk simulator
+- **Real trading costs** — brokerage, STT, exchange transaction charges, GST, and stamp duty modeled per Indian discount-broker rates, subtracted from every simulated trade
+- **Real position sizing** — 15% of capital per trade, capped at 5 concurrent positions (not a fixed 1-share toy)
+- **Real statistical rigor** — every strategy is pooled-tested for significance before being trusted, not judged on a single backtest run
+- **Real infrastructure** — self-healing (auto-restarts on deploy), rate-limited, deployed on Render + Neon Postgres, kept alive via scheduled health checks
+
+## Architecture
+
+Alpha Terminal (React, deployed via Lovable)
+        |
+        |  REST API (JWT + API-key auth)
+        v
+FastAPI backend (Render, Docker)
+        |
+        +--> 
+        Yahoo Finance (live prices)
+        |
+        +--> 
+        Neon Postgres (users, trades, sessions)
+        |
+        +--> 
+        Per-user BotRunner
+             (isolated portfolio, strategy instance,
+              paper broker - one per logged-in user)
+
+**Backend:** FastAPI, SQLAlchemy, JWT auth (passlib + python-jose)
+**Database:** PostgreSQL (Neon), migrated from SQLite for deploy-persistent storage
+**Frontend:** React, TradingView lightweight-charts, deployed via Lovable
+**Data:** yfinance (live prices + historical OHLCV), NSE official equity master list
 
 ## Features
 
-- **Paper trading bot** — runs a live watchlist against a simulated or real
-  price feed, executes signals automatically, tracks a full DB-backed trade
-  history. Market-hours aware (won't trade at 2am on a Saturday).
-- **Backtesting engine** — runs any strategy over real historical NSE data
-  (via Yahoo Finance), with:
-  - Real Indian intraday cost modeling (brokerage cap, STT, exchange
-    charges, GST, stamp duty)
-  - Capital-percentage position sizing (not a fixed share count)
-  - Statistical significance testing (pooled trade z-test)
-- **Three strategies**: EMA/RSI crossover, RSI mean-reversion (with
-  stop-loss/take-profit exit variants), and volume-confirmed crossover
-- **Research screener** covering the full official NSE stock list
-  (~2,000 symbols), with multi-period trailing returns (3mo/6mo/1y/2y),
-  relative strength vs Nifty 50, volatility, and P/E — paginated, sortable,
-  filterable
-- **Interactive dashboard** — candlestick charts, live watchlist, stock
-  detail modal with its own chart, trade log
-- **17-test automated suite**, run on every push via GitHub Actions CI
-- **Dockerized**, deployed live on Render
-- API key auth + rate limiting
+- **Live paper trading** — per-user isolated bot sessions, real-time price ticks, real position/cash tracking
+- **Research page** — search any of ~2,000 NSE stocks: live quote, historical candlestick chart, basic fundamentals (P/E, market cap, 52-week range)
+- **Backtest Lab** — run any strategy against any symbol/period, with full statistical significance testing
+- **Trade history & strategy stats** — per-user trade log, cross-strategy performance comparison
+- **User accounts** — email/password signup, JWT-authenticated sessions, fully isolated per-user portfolios
 
-![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)
-
-## Structure
-
-```
-app/
-  config.py            settings from .env
-  database.py           SQLAlchemy engine/session
-  models.py              Trade, BotSession, PriceTick tables
-  auth.py                 API key authentication
-  strategies/             swap strategies without touching the runner
-    ema_rsi.py
-    mean_reversion.py
-    volume_confirmed.py
-  broker/                 paper vs live, same interface
-    paper_broker.py
-    angel_broker.py
-  data_feed/               simulated vs real price feeds
-  backtest/
-    engine.py               core backtest simulation loop
-    costs.py                 real Indian intraday trading cost model
-    portfolio_stats.py       statistical significance testing
-    historical_data.py       Yahoo Finance data fetching
-  screener/
-    candidates.py             momentum/valuation research screener
-    long_term.py               multi-period trailing return screener
-    nse_universe.py            full NSE master list loader
-  bot_runner.py            background thread running the live loop
-  api/routes.py            REST endpoints
-frontend/index.html        dashboard (candlestick charts, screener, modal)
-tests/                      17 automated tests
-main.py                     FastAPI app entrypoint
-STRATEGY_EVALUATION.md      full findings write-up
-```
-
-## Setup
-
-### Option A: Docker (recommended)
+## Running locally
 
 ```bash
-cp .env.example .env    # fill in values, see below
-docker-compose up --build
-```
-
-### Option B: Local Python
-
-```bash
+git clone <repo>
+cd tradebot
 python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
+venv\Scripts\activate  # Windows
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # fill in DATABASE_URL (sqlite:///./tradebot.db works for local dev), JWT_SECRET
 uvicorn main:app --reload
 ```
 
-Either way, open `http://127.0.0.1:8000/dashboard/`.
+API docs: `http://127.0.0.1:8000/docs`
 
-### Required setup for the full stock screener
+## Strategy detail
 
-Download NSE's official equity list and save it as `data/EQUITY_L.csv`:
-```
-https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
-```
+The deployed strategy (`mean_reversion`) trades RSI oversold/overbought signals with a fixed stop-loss and RSI-based take-profit exit. Params were selected from a 2-year backtest, then validated out-of-sample on a completely different set of stocks (LT, MARUTI, ASIANPAINT, ULTRACEMCO, TITAN) and over a longer 5-year window — both confirmations held. Full breakdown, including the three rejected strategies and why they didn't survive testing, is in [`STRATEGY_EVALUATION.md`](./STRATEGY_EVALUATION.md).
 
-## Running tests
+## Author
 
-```bash
-pip install pytest
-python -m pytest tests/ -v
-```
-
-17 tests covering cost math, position sizing, and strategy signal logic.
-Runs automatically on every push via GitHub Actions.
-
-## API
-
-Full interactive docs at `/docs` once running. Key endpoints:
-
-- `POST /api/bot/start` / `POST /api/bot/stop` — control the paper trading loop
-- `GET /api/watchlist/screener` — live momentum screener on the active watchlist
-- `POST /api/backtest/historical` — backtest a strategy on real historical data
-- `POST /api/backtest/significance` — pooled statistical significance test
-- `GET /api/discover/long-term` — multi-period trailing return screener
-- `GET /api/discover/universe-batch` — paginated scan of the full NSE universe
-
-## Going live (real money) — not currently recommended
-
-`app/broker/angel_broker.py` implements the real Angel One Smart API for
-when/if a strategy passes rigorous validation. As of this write-up, none
-has — see [STRATEGY_EVALUATION.md](./STRATEGY_EVALUATION.md) for the full
-statistical case. Don't flip `BOT_MODE=live` without running the
-significance test framework against your specific strategy and getting a
-real, statistically significant positive result first.
-
-## Disclaimer
-
-This project is for educational and portfolio purposes. Nothing here is
-investment advice. Past backtested performance does not predict future
-results. No strategy in this repository is currently validated for live
-trading with real capital.
+Kartikya Motwani — [GitHub](https://github.com/Kartik-061)
