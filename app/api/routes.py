@@ -18,6 +18,7 @@ from app.screener.long_term import scan_long_term, PERIOD_WINDOWS_TRADING_DAYS
 from app.screener.nse_universe import get_universe_batch
 from app.backtest.historical_data import fetch_historical_closes, fetch_historical_ohlcv, fetch_ohlc_for_chart
 from app.backtest.portfolio_stats import test_significance
+from fastapi import HTTPException
 
 from app.auth import verify_api_key
 from app.rate_limit import limiter
@@ -133,7 +134,7 @@ def backtest_historical(request: Request, strategy: str = "ema_rsi", symbol: str
     try:
         prices = fetch_historical_closes(symbol, interval=interval, period=period)
     except ValueError as e:
-        return {"status": False, "reason": str(e)}
+        raise HTTPException(status_code=400, detail=str(e))
 
     result = run_backtest(strategy_cls(), prices, starting_capital=starting_capital)
     return {
@@ -355,11 +356,11 @@ def stock_info(request: Request, symbol: str):
         ticker = yf.Ticker(f"{symbol.upper()}.NS")
         info = ticker.info
     except Exception:
-        return {
-            "status": False,
-            "reason": "Yahoo Finance rate limit hit or temporarily unavailable. "
-                      "This demo uses a free data source with no SLA — try again in a few minutes.",
-        }
+        raise HTTPException(
+            status_code=503,
+            detail="Yahoo Finance rate limit hit or temporarily unavailable. "
+                   "This demo uses a free data source with no SLA — try again in a few minutes.",
+        )
     return {
         "symbol": symbol.upper(),
         "name": info.get("longName"),
