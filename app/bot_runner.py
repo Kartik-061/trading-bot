@@ -84,7 +84,7 @@ class BotRunner:
         self.tick_seconds = 2
         self.last_signal = {}
 
-    def start(self, symbols: list = None, strategy_name: str = "ema_rsi", tick_seconds: float = 2):
+    def start(self, symbols: list = None, strategy_name: str = "ema_rsi", tick_seconds: float = 2, starting_capital: float = None):
         if self.running:
             return {"status": False, "reason": "already_running"}
 
@@ -99,7 +99,7 @@ class BotRunner:
             started_at=datetime.utcnow(),
             symbol=",".join(symbols),
             strategy_name=strategy_name,
-            starting_capital=settings.PAPER_STARTING_CAPITAL,
+            starting_capital=starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL,
             is_live=(settings.MODE == "live"),
             status="running",
             user_id=self.user_id,
@@ -115,6 +115,7 @@ class BotRunner:
         self.strategies = {sym: strategy_cls() for sym in symbols}
         self.tick_seconds = tick_seconds
         self.last_signal = {sym: "HOLD" for sym in symbols}
+        self.starting_capital = starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL
         self.running = True
 
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -123,7 +124,7 @@ class BotRunner:
 
     def _run_loop(self):
         db = SessionLocal()
-        self.broker = PaperBroker(db, settings.PAPER_STARTING_CAPITAL, self.strategy_name, user_id=self.user_id)
+        self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
         self.broker.connect()
 
         self.feed = YahooLiveFeed(self.symbols)

@@ -23,10 +23,12 @@ user_bot_router = APIRouter()
 @user_bot_router.post("/me/bot/start")
 def start_my_bot(symbols: Optional[str] = None, strategy: str = "mean_reversion",
                   tick_seconds: float = Query(60, gt=0, le=300),
+                  starting_capital: Optional[float] = Query(None, gt=0),
                   current_user: User = Depends(get_current_user)):
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     return user_bot_manager.start(current_user.id, symbols=symbol_list,
-                                   strategy_name=strategy, tick_seconds=tick_seconds)
+                                    strategy_name=strategy, tick_seconds=tick_seconds,
+                                    starting_capital=starting_capital)
 
 
 @user_bot_router.post("/me/bot/stop")
