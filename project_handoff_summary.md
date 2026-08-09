@@ -175,3 +175,32 @@ Design system: dark theme (`#0B0E11` background), monospace numerics, green/red 
 - **Full NNFX-style Pine Script / TradingView / crypto-exchange toolchain** (inspired by a YouTube trading-bot creator's workflow) — evaluated and rejected as not applicable; the underlying disciplines (drawdown focus, realistic cost modeling, forward-testing before capital) were already being followed more rigorously in the existing Python system, and switching tools would have meant abandoning stronger existing infrastructure to chase an unproven, differently-scoped toolchain.
 - **Discord bot integration** — considered as a "distribution" idea, correctly reframed as a feature (real-time trade alerts via webhook) rather than a growth lever; not built, not currently planned as a priority.
 - **Chasing a 5th/6th strategy after 3 straight rejections** (trend_following, breakout, volume_confirmed all failed significance) — explicitly decided to stop strategy-hunting once the pattern became clear, rather than keep testing variations hoping for a second lucky p-value.
+
+## Recently Fixed (Aug 9, 2026 session)
+
+- **Screener showing garbage rows** — `/discover/long-term` response shape 
+  (`{disclaimer, ranked_by, candidates}`) wasn't being unwrapped correctly. 
+  Fixed in `normalizeScreener()` (lib/api.ts) to recognize the `candidates` 
+  key, and reverted the earlier incorrect patch in screener.tsx.
+
+- **Strategy Stats / Backtest Lab showing identical numbers across all 
+  strategies** — `runBacktest()` and `runSignificance()` were sending 
+  `strategy`, `symbol`, `period` etc. as a JSON body, but the backend 
+  routes (`/backtest/historical`, `/backtest/significance`) read them as 
+  query params. Backend silently fell back to its defaults every time. 
+  Fixed by sending params via query string in api.ts, and correcting the 
+  `initial_capital` → `starting_capital` key mismatch.
+
+- **Portfolio Equity Curve now wired to real data** — fetches from 
+  `GET /me/portfolio/history`, renders as an area chart, falls back to 
+  the existing empty state when no snapshots exist yet.
+
+- **Starting Capital is now user-editable** — added an input field next 
+  to Tick Interval on the Live Bot page; passed as `starting_capital` 
+  when a new bot session starts.
+
+## Known Open Items
+
+- Backtest Lab chart shows "No candle data returned" even when stats 
+  calculate correctly — cosmetic display bug, not yet root-caused.
+- [any other genuinely open items from your original doc]
