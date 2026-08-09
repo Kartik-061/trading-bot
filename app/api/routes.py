@@ -351,8 +351,15 @@ def stock_info(request: Request, symbol: str):
     """Basic fundamentals for stock research - separate from fast_info-based
     live prices since .info is heavier; rate-limited accordingly."""
     import yfinance as yf
-    ticker = yf.Ticker(f"{symbol.upper()}.NS")
-    info = ticker.info
+    try:
+        ticker = yf.Ticker(f"{symbol.upper()}.NS")
+        info = ticker.info
+    except Exception:
+        return {
+            "status": False,
+            "reason": "Yahoo Finance rate limit hit or temporarily unavailable. "
+                      "This demo uses a free data source with no SLA — try again in a few minutes.",
+        }
     return {
         "symbol": symbol.upper(),
         "name": info.get("longName"),
