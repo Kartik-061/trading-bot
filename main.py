@@ -97,7 +97,7 @@ def root():
     return {"message": "Trading bot API running. See /docs for API or /dashboard for the UI."}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     """Simple liveness check - useful for Docker healthchecks or a future
     deploy platform (Render, etc) to confirm the app actually booted."""
