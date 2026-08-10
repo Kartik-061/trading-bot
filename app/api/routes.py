@@ -320,7 +320,8 @@ def discover_universe_batch(request: Request, offset: int = Query(0, ge=0),
 
 @router.get("/discover/stock-chart/{symbol}")
 @limiter.limit("15/minute")
-def stock_chart(request: Request, symbol: str, period: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"] = "1y"):
+def stock_chart(request: Request, symbol: str, 
+                 period: Literal["5d", "1mo", "3mo", "6mo", "60d", "90d", "1y", "2y", "5y", "max"] = "1y"):
     """
     Full OHLC candles for one stock, for the long-term screener's
     click-to-view-detail chart.

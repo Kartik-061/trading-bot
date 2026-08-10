@@ -82,6 +82,6 @@ def my_portfolio_history(limit: int = Query(500, gt=0, le=5000),
                  .order_by(PortfolioSnapshot.timestamp)
                  .limit(limit).all())
     return [
-        {"time": int(s.timestamp.timestamp()), "value": s.portfolio_value}
+        {"time": s.timestamp.isoformat(), "value": s.portfolio_value}
         for s in snapshots
     ]
