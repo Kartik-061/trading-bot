@@ -136,7 +136,11 @@ class BotRunner:
                     time.sleep(min(self.tick_seconds * 10, 30))
                     continue
                 for symbol in self.symbols:
-                    price = self.feed.get_price(symbol)
+                    try:
+                        price = self.feed.get_price(symbol)
+                    except Exception as e:
+                        logger.warning(f"Price fetch failed for {symbol} (user_id={self.user_id}): {e}")
+                        continue  # skip this symbol this tick, don't kill the whole loop
                     db.add(PriceTick(timestamp=datetime.utcnow(), symbol=symbol, price=price))
                     holding = self.broker.get_holding_qty(symbol)
                     signal = self.strategies[symbol].decide(price, holding)
@@ -156,12 +160,14 @@ class BotRunner:
                 time.sleep(self.tick_seconds)
         except Exception as e:
             logger.exception(f"Bot loop crashed (user_id={self.user_id}): {e}")
+            self.running = False          # <-- YEH LINE ADD KI
             self._finalize(db, status="crashed")
             db.close()
             return
 
         self._finalize(db, status="stopped")
         db.close()
+        return
 
     def _finalize(self, db, status):
         bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
@@ -182,7 +188,7 @@ class BotRunner:
         return {"status": True}
 
     def status(self):
-        if not self.running or not self.broker:
+        if not self.running or not self.broker or (self.thread and not self.thread.is_alive()):
             return {"running": False, "market_open": is_market_open()}
         latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
         db = SessionLocal()
