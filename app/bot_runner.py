@@ -195,6 +195,11 @@ class BotRunner:
         bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
         started_at = bot_session.started_at.isoformat() if bot_session else None
         db.close()
+
+        current_value = self.broker.portfolio_value(latest_prices)
+        starting_capital = self.starting_capital
+        total_return_pct = round((current_value - starting_capital) / starting_capital * 100, 2) if starting_capital else 0
+
         return {
             "running": True,
             "session_id": self.session_id,
@@ -204,7 +209,11 @@ class BotRunner:
             "market_open": is_market_open(),
             "cash": self.broker.cash,
             "positions": self.broker.positions,
-            "portfolio_value": self.broker.portfolio_value(latest_prices),
+            "portfolio_value": current_value,
+            "starting_capital": starting_capital,
+            "total_return_pct": total_return_pct,
+            "day_pnl": round(current_value - starting_capital, 2),
+            "day_pnl_pct": total_return_pct,
         }
 
     def screener(self):
