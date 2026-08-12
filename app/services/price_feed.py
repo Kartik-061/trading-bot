@@ -10,16 +10,30 @@ millisecond-live. That's the honest tradeoff until Angel One is wired
 in properly (and that only works with a static IP anyway).
 """
 import yfinance as yf
-from functools import lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 _cache = {}
 _CACHE_TTL_SECONDS = 60  # don't hammer yfinance on every dashboard refresh
+_FETCH_TIMEOUT_SECONDS = 8  # hard cap - yfinance has no native timeout, so we enforce one
+
+_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _nse_symbol(symbol: str) -> str:
     """NSE symbols need a .NS suffix for yfinance."""
     return symbol if symbol.endswith(".NS") else f"{symbol}.NS"
+
+
+def _fetch_fast_info(symbol: str) -> dict:
+    ticker = yf.Ticker(_nse_symbol(symbol))
+    info = ticker.fast_info  # cheaper than .info, has what we need
+    return {
+        "last_price": info["last_price"],
+        "previous_close": info["previous_close"],
+        "day_high": info["day_high"],
+        "day_low": info["day_low"],
+    }
 
 
 def get_live_price(symbol: str) -> dict:
@@ -28,17 +42,20 @@ def get_live_price(symbol: str) -> dict:
     if cached and (now - cached["fetched_at"]).total_seconds() < _CACHE_TTL_SECONDS:
         return cached["data"]
 
-    ticker = yf.Ticker(_nse_symbol(symbol))
-    info = ticker.fast_info  # cheaper than .info, has what we need
+    future = _executor.submit(_fetch_fast_info, symbol)
+    try:
+        raw = future.result(timeout=_FETCH_TIMEOUT_SECONDS)
+    except FutureTimeoutError:
+        raise TimeoutError(f"yfinance did not respond for {symbol} within {_FETCH_TIMEOUT_SECONDS}s")
 
     data = {
         "symbol": symbol,
-        "last_price": round(info["last_price"], 2),
-        "previous_close": round(info["previous_close"], 2),
-        "day_high": round(info["day_high"], 2),
-        "day_low": round(info["day_low"], 2),
+        "last_price": round(raw["last_price"], 2),
+        "previous_close": round(raw["previous_close"], 2),
+        "day_high": round(raw["day_high"], 2),
+        "day_low": round(raw["day_low"], 2),
         "change_pct": round(
-            (info["last_price"] - info["previous_close"]) / info["previous_close"] * 100, 2
+            (raw["last_price"] - raw["previous_close"]) / raw["previous_close"] * 100, 2
         ),
         "fetched_at": now.isoformat(),
     }
