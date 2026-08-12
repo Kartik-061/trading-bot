@@ -79,8 +79,9 @@ def my_portfolio_history(limit: int = Query(500, gt=0, le=5000),
     """Powers the Dashboard equity curve - one point per bot tick."""
     snapshots = (db.query(PortfolioSnapshot)
                  .filter(PortfolioSnapshot.user_id == current_user.id)
-                 .order_by(PortfolioSnapshot.timestamp)
+                 .order_by(desc(PortfolioSnapshot.timestamp))
                  .limit(limit).all())
+    snapshots.reverse()  # oldest-to-newest for the chart, but we fetched newest-first
     return [
         {"time": s.timestamp.isoformat(), "value": s.portfolio_value}
         for s in snapshots
