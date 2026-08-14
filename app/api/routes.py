@@ -122,11 +122,6 @@ def backtest(strategy: str = "ema_rsi", symbol: str = "SBIFUNDS",
 def backtest_historical(request: Request, strategy: str = "ema_rsi", symbol: str = "RELIANCE",
                          interval: str = "5m", period: str = "60d",
                          starting_capital: float = Query(100000, gt=0)):
-    """
-    Runs a strategy over REAL historical price data from Yahoo Finance.
-    This is the honest test - simulated backtest tells you the code works,
-    this one tells you whether the strategy has any actual edge.
-    """
     strategy_cls = STRATEGY_REGISTRY.get(strategy)
     if strategy_cls is None:
         return {"status": False, "reason": f"unknown_strategy: {strategy}"}
@@ -150,9 +145,9 @@ def backtest_historical(request: Request, strategy: str = "ema_rsi", symbol: str
         "win_rate_pct": result.win_rate,
         "max_drawdown_pct": result.max_drawdown_pct,
         "total_costs_rs": result.total_costs,
+        "trades": result.trades,
         "note": "Tested on real historical price data.",
     }
-
 
 @router.post("/backtest/batch")
 @limiter.limit("5/minute")
