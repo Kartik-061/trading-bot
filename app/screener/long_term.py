@@ -136,23 +136,24 @@ def fetch_index_baseline() -> dict:
 
 
 def scan_long_term(symbols: list = None, rank_by: str = "1y") -> list:
-    """
-    Scans the universe in parallel, ranks by trailing return for the chosen
-    holding period. rank_by: '3mo', '6mo', '1y', or '2y'.
-    """
     symbols = symbols or EXTENDED_UNIVERSE
     index_returns = fetch_index_baseline()
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(fetch_multi_period, sym): sym for sym in symbols}
-        for future in as_completed(futures, timeout=PER_TICKER_TIMEOUT_SECONDS * 3):
-            try:
-                candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
-                if candidate:
-                    results.append(candidate)
-            except Exception:
-                continue
+        try:
+            for future in as_completed(futures, timeout=PER_TICKER_TIMEOUT_SECONDS * 3):
+                try:
+                    candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
+                    if candidate:
+                        results.append(candidate)
+                except Exception:
+                    continue
+        except Exception:
+            # Overall window elapsed before every future finished - keep
+            # whatever completed successfully instead of discarding it all.
+            pass
 
     for r in results:
         stock_ret = r["returns_pct"].get(rank_by)
