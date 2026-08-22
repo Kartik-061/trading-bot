@@ -31,6 +31,12 @@ class Settings:
     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
 
+    # Position sizing - must match app/backtest/engine.py's defaults
+    # (capital_pct_per_trade=0.15, implicit 5-position cap already enforced
+    # in PaperBroker) so the live/paper bot actually trades the same sizing
+    # scheme that was statistically validated, not a different untested one.
+    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.15"))
+
     # API auth - if left empty, auth is skipped (convenient for local dev).
     # MUST be set to a real random value before deploying anywhere public.
     API_KEY = os.getenv("API_KEY", "")

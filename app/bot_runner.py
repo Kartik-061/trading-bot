@@ -145,8 +145,20 @@ class BotRunner:
                     holding = self.broker.get_holding_qty(symbol)
                     signal = self.strategies[symbol].decide(price, holding)
                     self.last_signal[symbol] = signal
-                    if signal in ("BUY", "SELL"):
-                        self.broker.place_order(symbol, signal, settings.DEFAULT_QTY, price)
+                    if signal == "BUY":
+                        # Size like engine.py does: capital_pct_per_trade of
+                        # current cash, not a fixed share count. This is the
+                        # sizing scheme that was actually statistically
+                        # validated (p=0.0008) - a flat DEFAULT_QTY here
+                        # would mean the live bot trades a different, never-
+                        # tested strategy from the one the backtest proved.
+                        qty = max(1, int((self.broker.cash * settings.CAPITAL_PCT_PER_TRADE) // price))
+                        self.broker.place_order(symbol, signal, qty, price)
+                    elif signal == "SELL":
+                        # Close the full held position, same as engine.py -
+                        # a fixed DEFAULT_QTY SELL could leave a stray
+                        # partial position sitting open instead of exiting.
+                        self.broker.place_order(symbol, signal, holding, price)
                 latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
                 portfolio_value = self.broker.portfolio_value(latest_prices)
                 db.add(PortfolioSnapshot(

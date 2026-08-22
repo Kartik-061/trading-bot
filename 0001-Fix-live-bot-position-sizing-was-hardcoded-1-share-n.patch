@@ -1,0 +1,80 @@
+From ed1aa758c25dca9172201891feafd7b5ef182869 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 22 Aug 2026 07:38:11 +0000
+Subject: [PATCH] Fix live bot position sizing: was hardcoded 1-share, now
+ matches validated 15% capital-per-trade
+
+bot_runner.py's live/paper trading loop was calling
+place_order(symbol, signal, settings.DEFAULT_QTY, price) - a flat,
+hardcoded quantity (DEFAULT_QTY defaults to 1 share) regardless of
+price or account capital.
+
+This didn't match app/backtest/engine.py, which sizes each BUY as
+capital_pct_per_trade (15%) of current cash - the sizing scheme that
+was actually statistically validated (p=0.0008, STRATEGY_EVALUATION.md).
+The live bot was silently trading a completely different, never-tested
+sizing scheme from the one the backtest proved out. On a Rs 100,000
+account, 1 share of RELIANCE (~Rs 2,950) is under 3% of capital vs the
+intended 15% - meaningful under-allocation that also makes any live
+P&L not actually representative of the validated strategy.
+
+Fix: BUY now sizes dynamically as CAPITAL_PCT_PER_TRADE (new config,
+default 0.15, same default as engine.py) of current broker cash, floor
+1 share - identical logic to engine.py. SELL now closes the full held
+position (was already only reachable when holding_qty > 0, per
+mean_reversion.py's decide() logic) instead of a fixed qty, matching
+how the backtest engine exits positions too.
+
+Added Settings.CAPITAL_PCT_PER_TRADE in config.py, overridable via env.
+---
+ app/bot_runner.py | 16 ++++++++++++++--
+ app/config.py     |  6 ++++++
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 52d1ffc..c322ad6 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -145,8 +145,20 @@ class BotRunner:
+                     holding = self.broker.get_holding_qty(symbol)
+                     signal = self.strategies[symbol].decide(price, holding)
+                     self.last_signal[symbol] = signal
+-                    if signal in ("BUY", "SELL"):
+-                        self.broker.place_order(symbol, signal, settings.DEFAULT_QTY, price)
++                    if signal == "BUY":
++                        # Size like engine.py does: capital_pct_per_trade of
++                        # current cash, not a fixed share count. This is the
++                        # sizing scheme that was actually statistically
++                        # validated (p=0.0008) - a flat DEFAULT_QTY here
++                        # would mean the live bot trades a different, never-
++                        # tested strategy from the one the backtest proved.
++                        qty = max(1, int((self.broker.cash * settings.CAPITAL_PCT_PER_TRADE) // price))
++                        self.broker.place_order(symbol, signal, qty, price)
++                    elif signal == "SELL":
++                        # Close the full held position, same as engine.py -
++                        # a fixed DEFAULT_QTY SELL could leave a stray
++                        # partial position sitting open instead of exiting.
++                        self.broker.place_order(symbol, signal, holding, price)
+                 latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+                 portfolio_value = self.broker.portfolio_value(latest_prices)
+                 db.add(PortfolioSnapshot(
+diff --git a/app/config.py b/app/config.py
+index f63295a..bd7a4e4 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -31,6 +31,12 @@ class Settings:
+     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
+     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
+ 
++    # Position sizing - must match app/backtest/engine.py's defaults
++    # (capital_pct_per_trade=0.15, implicit 5-position cap already enforced
++    # in PaperBroker) so the live/paper bot actually trades the same sizing
++    # scheme that was statistically validated, not a different untested one.
++    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.15"))
++
+     # API auth - if left empty, auth is skipped (convenient for local dev).
+     # MUST be set to a real random value before deploying anywhere public.
+     API_KEY = os.getenv("API_KEY", "")
+-- 
+2.43.0
+
