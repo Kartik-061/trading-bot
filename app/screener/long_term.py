@@ -142,18 +142,21 @@ def scan_long_term(symbols: list = None, rank_by: str = "1y") -> list:
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(fetch_multi_period, sym): sym for sym in symbols}
-        try:
-            for future in as_completed(futures, timeout=PER_TICKER_TIMEOUT_SECONDS * 3):
-                try:
-                    candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
-                    if candidate:
-                        results.append(candidate)
-                except Exception:
-                    continue
-        except Exception:
-            # Overall window elapsed before every future finished - keep
-            # whatever completed successfully instead of discarding it all.
-            pass
+        # No overall timeout here on purpose: the `with` block's own
+        # executor.shutdown(wait=True) already blocks until every submitted
+        # future finishes, no matter what. A shorter timeout on as_completed()
+        # doesn't save any time - it just abandons the iteration early and
+        # throws away results for symbols whose fetch had already completed
+        # (or was about to). That was the real cause of the "12/42" bug: full
+        # wait time paid, most of the data discarded anyway. Each individual
+        # fetch is still bounded by PER_TICKER_TIMEOUT_SECONDS below.
+        for future in as_completed(futures):
+            try:
+                candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
+                if candidate:
+                    results.append(candidate)
+            except Exception:
+                continue
 
     for r in results:
         stock_ret = r["returns_pct"].get(rank_by)

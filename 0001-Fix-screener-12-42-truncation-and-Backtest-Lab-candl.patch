@@ -1,0 +1,86 @@
+From e122532a53acedc909df44cf9c9d034abe69b072 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 22 Aug 2026 07:24:10 +0000
+Subject: [PATCH] Fix screener 12/42 truncation and Backtest Lab candle chart
+ data source
+
+- long_term.py: remove overall as_completed() timeout on scan_long_term.
+  ThreadPoolExecutor's own shutdown(wait=True) already blocks until all
+  42 submitted futures finish regardless, so the old 24s cutoff was
+  paying the full wait time while still discarding ~30 completed
+  results. Now everything that finishes gets kept.
+
+- backtest.tsx: Backtest Lab's chart was calling candlesQuery
+  (/prices/{symbol}/candles), which reads from the live bot's
+  PriceTick table and is empty unless the bot has actively run on
+  that exact symbol. Switched to stockChartQuery
+  (/discover/stock-chart/{symbol}), the real historical-OHLC endpoint
+  Research page already uses correctly.
+---
+ app/screener/long_term.py        | 27 +++++++++++++++------------
+ frontend/src/routes/backtest.tsx |  4 ++--
+ 2 files changed, 17 insertions(+), 14 deletions(-)
+
+diff --git a/app/screener/long_term.py b/app/screener/long_term.py
+index 3f79560..e24c35d 100644
+--- a/app/screener/long_term.py
++++ b/app/screener/long_term.py
+@@ -142,18 +142,21 @@ def scan_long_term(symbols: list = None, rank_by: str = "1y") -> list:
+ 
+     with ThreadPoolExecutor(max_workers=8) as executor:
+         futures = {executor.submit(fetch_multi_period, sym): sym for sym in symbols}
+-        try:
+-            for future in as_completed(futures, timeout=PER_TICKER_TIMEOUT_SECONDS * 3):
+-                try:
+-                    candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
+-                    if candidate:
+-                        results.append(candidate)
+-                except Exception:
+-                    continue
+-        except Exception:
+-            # Overall window elapsed before every future finished - keep
+-            # whatever completed successfully instead of discarding it all.
+-            pass
++        # No overall timeout here on purpose: the `with` block's own
++        # executor.shutdown(wait=True) already blocks until every submitted
++        # future finishes, no matter what. A shorter timeout on as_completed()
++        # doesn't save any time - it just abandons the iteration early and
++        # throws away results for symbols whose fetch had already completed
++        # (or was about to). That was the real cause of the "12/42" bug: full
++        # wait time paid, most of the data discarded anyway. Each individual
++        # fetch is still bounded by PER_TICKER_TIMEOUT_SECONDS below.
++        for future in as_completed(futures):
++            try:
++                candidate = future.result(timeout=PER_TICKER_TIMEOUT_SECONDS)
++                if candidate:
++                    results.append(candidate)
++            except Exception:
++                continue
+ 
+     for r in results:
+         stock_ret = r["returns_pct"].get(rank_by)
+diff --git a/frontend/src/routes/backtest.tsx b/frontend/src/routes/backtest.tsx
+index d115143..eac20c4 100644
+--- a/frontend/src/routes/backtest.tsx
++++ b/frontend/src/routes/backtest.tsx
+@@ -4,7 +4,7 @@ import { useState } from "react";
+ 
+ import { CandleChart } from "@/components/charts";
+ import { ErrorState, Panel, SkeletonRows, StatCard, Tag } from "@/components/kit";
+-import { candlesQuery } from "@/lib/queries";
++import { stockChartQuery } from "@/lib/queries";
+ import { runBacktest, runBatchBacktest, runSignificance } from "@/lib/api";
+ import type { BacktestResult, SignificanceResult, Trade } from "@/lib/api";
+ import { INTERVALS, PERIODS, STRATEGIES } from "@/lib/strategies";
+@@ -60,7 +60,7 @@ function BacktestLab() {
+   const batch = useMutation<BacktestResult[], Error>({ mutationFn: () => runBatchBacktest(body()) });
+   const sig = useMutation<SignificanceResult, Error>({ mutationFn: () => runSignificance(body()) });
+ 
+-  const candles = useQuery(candlesQuery(primary, interval, period));
++  const candles = useQuery(stockChartQuery(primary, period));
+ 
+   const result = single.data;
+   const trades: Trade[] = result?.trades ?? [];
+-- 
+2.43.0
+

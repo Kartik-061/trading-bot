@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { CandleChart } from "@/components/charts";
 import { ErrorState, Panel, SkeletonRows, StatCard, Tag } from "@/components/kit";
-import { candlesQuery } from "@/lib/queries";
+import { stockChartQuery } from "@/lib/queries";
 import { runBacktest, runBatchBacktest, runSignificance } from "@/lib/api";
 import type { BacktestResult, SignificanceResult, Trade } from "@/lib/api";
 import { INTERVALS, PERIODS, STRATEGIES } from "@/lib/strategies";
@@ -60,7 +60,7 @@ function BacktestLab() {
   const batch = useMutation<BacktestResult[], Error>({ mutationFn: () => runBatchBacktest(body()) });
   const sig = useMutation<SignificanceResult, Error>({ mutationFn: () => runSignificance(body()) });
 
-  const candles = useQuery(candlesQuery(primary, interval, period));
+  const candles = useQuery(stockChartQuery(primary, period));
 
   const result = single.data;
   const trades: Trade[] = result?.trades ?? [];
