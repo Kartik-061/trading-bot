@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.broker.base import BaseBroker
 from app.models import Trade
+from app.backtest.costs import buy_costs, sell_costs
 
 logger = logging.getLogger("paper_broker")
 
@@ -41,10 +42,15 @@ class PaperBroker(BaseBroker):
             if not already_holding and open_positions >= self.max_concurrent_positions:
                 return {"status": False, "reason": "max_concurrent_positions_reached"}
 
-            if cost > self.cash:
+            # Real trading costs, same as engine.py - without this the live
+            # bot's cash/portfolio numbers assume zero-cost trades, which
+            # doesn't match the validated backtest and quietly overstates
+            # returns (costs only ever reduce P&L, never help it).
+            fees = buy_costs(price, qty)
+            if cost + fees > self.cash:
                 return {"status": False, "reason": "insufficient_funds"}
 
-            self.cash -= cost
+            self.cash -= (cost + fees)
             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
             new_qty = pos["qty"] + qty
             pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + cost) / new_qty
@@ -55,7 +61,8 @@ class PaperBroker(BaseBroker):
             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
             if pos["qty"] < qty:
                 return {"status": False, "reason": "insufficient_shares"}
-            self.cash += cost
+            fees = sell_costs(price, qty)
+            self.cash += (cost - fees)
             pos["qty"] -= qty
             if pos["qty"] == 0:
                 pos["avg_price"] = 0.0

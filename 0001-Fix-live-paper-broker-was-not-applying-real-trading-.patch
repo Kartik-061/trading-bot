@@ -1,0 +1,74 @@
+
+From 077c30b6d893eb94034c0354a0c1d2de9bc6be06 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 22 Aug 2026 07:43:03 +0000
+Subject: [PATCH] Fix live paper broker: was not applying real trading costs at
+ all
+
+PaperBroker.place_order() computed cash/position changes as pure
+qty*price, with zero brokerage/STT/exchange-charge/GST/stamp-duty
+deduction - it never called buy_costs()/sell_costs() from
+app/backtest/costs.py at all.
+
+This is the same class of bug as the position-sizing fix: the live
+paper bot's PaperBroker was never kept in sync with app/backtest/engine.py,
+which does apply these costs (confirmed by the passing
+test_costs_actually_reduce_final_value test) and is what actually
+produced the validated p=0.0008 result. The live bot was silently
+assuming zero-cost trades, overstating every trade's real P&L and
+making live/paper results not actually representative of the
+validated, cost-aware strategy.
+
+Fix: import buy_costs/sell_costs (already-tested, already-used-by-
+engine.py functions, no new logic invented) and apply them in
+place_order - BUY deducts value+fees and checks funds against that
+total, SELL adds proceeds minus fees. No DB schema change: the
+Trade.value column keeps storing gross trade value as before, only
+the cash/portfolio arithmetic now reflects real costs.
+---
+ app/broker/paper_broker.py | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/app/broker/paper_broker.py b/app/broker/paper_broker.py
+index 241a912..a5eb1ca 100644
+--- a/app/broker/paper_broker.py
++++ b/app/broker/paper_broker.py
+@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
+ 
+ from app.broker.base import BaseBroker
+ from app.models import Trade
++from app.backtest.costs import buy_costs, sell_costs
+ 
+ logger = logging.getLogger("paper_broker")
+ 
+@@ -41,10 +42,15 @@ class PaperBroker(BaseBroker):
+             if not already_holding and open_positions >= self.max_concurrent_positions:
+                 return {"status": False, "reason": "max_concurrent_positions_reached"}
+ 
+-            if cost > self.cash:
++            # Real trading costs, same as engine.py - without this the live
++            # bot's cash/portfolio numbers assume zero-cost trades, which
++            # doesn't match the validated backtest and quietly overstates
++            # returns (costs only ever reduce P&L, never help it).
++            fees = buy_costs(price, qty)
++            if cost + fees > self.cash:
+                 return {"status": False, "reason": "insufficient_funds"}
+ 
+-            self.cash -= cost
++            self.cash -= (cost + fees)
+             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
+             new_qty = pos["qty"] + qty
+             pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + cost) / new_qty
+@@ -55,7 +61,8 @@ class PaperBroker(BaseBroker):
+             pos = self.positions.get(symbol, {"qty": 0, "avg_price": 0.0})
+             if pos["qty"] < qty:
+                 return {"status": False, "reason": "insufficient_shares"}
+-            self.cash += cost
++            fees = sell_costs(price, qty)
++            self.cash += (cost - fees)
+             pos["qty"] -= qty
+             if pos["qty"] == 0:
+                 pos["avg_price"] = 0.0
+-- 
+2.43.0
+
