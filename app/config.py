@@ -29,7 +29,15 @@ class Settings:
     # Trading defaults
     PAPER_STARTING_CAPITAL = float(os.getenv("PAPER_STARTING_CAPITAL", "100000"))
     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
+    # Live price feed source. "yahoo" (default, free, no static IP needed,
+    # 15-20min delayed) or "angel" (Angel One SmartAPI market data - data-only,
+    # so it does NOT need a static IP despite orders requiring one).
     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
+
+    # Live price feed source. "yahoo" (default, free, no static IP needed,
+    # 15-20min delayed) or "angel" (Angel One SmartAPI market data - data-only,
+    # so it does NOT need a static IP despite orders requiring one).
+    PRICE_FEED = os.getenv("PRICE_FEED", "yahoo").lower()
 
     # Position sizing - must match what STRATEGY_EVALUATION.md's p=0.0008
     # result actually used (10%, confirmed by tests/test_engine.py's

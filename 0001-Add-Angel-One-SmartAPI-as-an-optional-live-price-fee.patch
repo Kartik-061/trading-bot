@@ -1,0 +1,295 @@
+From 45e32b200fb4bf8648f9d5f4c08e97a0ca52cd04 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sun, 23 Aug 2026 17:27:11 +0000
+Subject: [PATCH] Add Angel One SmartAPI as an optional live price feed
+ (data-only, no static IP needed)
+
+Adds app/services/angel_feed.py and AngelLiveFeed (bot_runner.py),
+selectable via a new PRICE_FEED env var ("yahoo", the existing
+default, or "angel"). Nothing changes for anyone who doesn't set this
+- YahooLiveFeed stays the default.
+
+Why this is possible on Render's free tier: Angel One's static-IP
+requirement (per their own docs) only applies to order/GTT endpoints
+- ltpData() and the instrument master are market-data endpoints and
+work from any IP. Since the bot only ever paper-trades (PaperBroker,
+no real orders sent to Angel One), this only needs the data side.
+
+What's new:
+- app/services/angel_feed.py: downloads and disk-caches Angel's
+  instrument master JSON (24h TTL) to build a symbol -> (tradingsymbol,
+  token) map for NSE equities, since Angel's LTP API needs a numeric
+  symboltoken rather than a plain ticker. get_angel_ltp() mirrors
+  price_feed.get_live_price()'s exact return shape and 60s cache
+  behavior, so it's a drop-in. Session login is lazy and reused; a
+  failed call triggers one re-login retry (Angel force-logs-out
+  sessions daily).
+- AngelLiveFeed class in bot_runner.py: same .prices/.get_price()
+  interface as YahooLiveFeed (this was literally already anticipated -
+  YahooLiveFeed's own docstring says "same interface as
+  SimulatedFeed/AngelLiveFeed", it just never got built until now).
+- settings.PRICE_FEED (config.py), default "yahoo".
+
+Tested: instrument-master parsing and token lookup verified against
+realistic mocked rows (correctly filters to NSE equity segment,
+resolves bare symbols, raises a clear error for unknown ones). All
+17 existing tests still pass. NOT tested against Angel One's real
+servers - this sandbox has no network access to angelone.in domains,
+so the actual login + ltpData call needs to be verified live before
+relying on it. Recommend: set PRICE_FEED=angel alongside the existing
+ANGEL_* credentials on Render, watch the logs for "Angel One data
+session established" and any errors on the first few ticks, and keep
+PRICE_FEED unset (defaults to yahoo) as the safe fallback if anything
+looks wrong.
+---
+ app/bot_runner.py          |  17 +++-
+ app/config.py              |   8 ++
+ app/services/angel_feed.py | 180 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 204 insertions(+), 1 deletion(-)
+ create mode 100644 app/services/angel_feed.py
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 1d72afa..4c40648 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -70,6 +70,21 @@ class YahooLiveFeed:
+         self.prices[symbol] = price
+         return price
+ 
++
++class AngelLiveFeed:
++    """Same interface as YahooLiveFeed - backed by Angel One SmartAPI market
++    data instead of yfinance. Data-only (never places orders), so it works
++    on Render's free tier without a static IP. Selected via PRICE_FEED=angel."""
++    def __init__(self, symbols: list):
++        self.prices = {}
++
++    def get_price(self, symbol: str) -> float:
++        from app.services.angel_feed import get_angel_ltp
++        data = get_angel_ltp(symbol)
++        price = data["last_price"]
++        self.prices[symbol] = price
++        return price
++
+ class BotRunner:
+     def __init__(self, user_id: int = None):
+         self.user_id = user_id
+@@ -145,7 +160,7 @@ class BotRunner:
+         self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
+         self.broker.connect()
+ 
+-        self.feed = YahooLiveFeed(self.symbols)
++        self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
+ 
+         try:
+             while self.running:
+diff --git a/app/config.py b/app/config.py
+index 35599bd..eb3dbe1 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -29,8 +29,16 @@ class Settings:
+     # Trading defaults
+     PAPER_STARTING_CAPITAL = float(os.getenv("PAPER_STARTING_CAPITAL", "100000"))
+     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
++    # Live price feed source. "yahoo" (default, free, no static IP needed,
++    # 15-20min delayed) or "angel" (Angel One SmartAPI market data - data-only,
++    # so it does NOT need a static IP despite orders requiring one).
+     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
+ 
++    # Live price feed source. "yahoo" (default, free, no static IP needed,
++    # 15-20min delayed) or "angel" (Angel One SmartAPI market data - data-only,
++    # so it does NOT need a static IP despite orders requiring one).
++    PRICE_FEED = os.getenv("PRICE_FEED", "yahoo").lower()
++
+     # Position sizing - must match what STRATEGY_EVALUATION.md's p=0.0008
+     # result actually used (10%, confirmed by tests/test_engine.py's
+     # capital_pct_per_trade=0.1), NOT app/backtest/engine.py's own function
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+new file mode 100644
+index 0000000..6e211f8
+--- /dev/null
++++ b/app/services/angel_feed.py
+@@ -0,0 +1,180 @@
++"""
++app/services/angel_feed.py
++
++Real live price feed via Angel One SmartAPI, as a swap-in replacement for
++price_feed.py's yfinance-based feed. Data-only: this module never places,
++modifies, or cancels an order, so it does NOT need a static outbound IP -
++Angel One's own docs are explicit that the static-IP requirement only
++applies to order/GTT endpoints, not market-data endpoints like ltpData().
++That's what makes this usable on Render's free tier.
++
++Angel One SmartAPI needs a numeric "symboltoken" per instrument, not a
++plain ticker string - so the first thing this module does is download and
++cache Angel's instrument master (a ~5-10MB JSON of every tradable
++instrument) and build a symbol -> (tradingsymbol, token) lookup for NSE
++equities. That file changes rarely, so it's cached to disk and only
++re-downloaded once a day.
++
++NOTE: this has not been live-tested against Angel One's actual servers -
++this sandbox has no network access to angelone.in domains. Test this for
++real (a plain script that logs in and fetches one LTP) before flipping
++PRICE_FEED=angel on the deployed bot.
++"""
++import json
++import logging
++import os
++import threading
++from datetime import datetime, timedelta
++
++import requests
++
++from app.config import settings
++
++logger = logging.getLogger("angel_feed")
++
++_INSTRUMENT_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
++_INSTRUMENT_CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", ".angel_instrument_cache.json")
++_INSTRUMENT_CACHE_MAX_AGE = timedelta(hours=24)
++
++_CACHE_TTL_SECONDS = 60  # match price_feed.py - don't hammer the API on every dashboard refresh
++_price_cache = {}
++
++_symbol_token_map = None  # bare symbol ("RELIANCE") -> (tradingsymbol "RELIANCE-EQ", token "2885")
++_map_lock = threading.Lock()
++
++_smart_api = None
++_session_lock = threading.Lock()
++
++
++def _download_instrument_master() -> list:
++    resp = requests.get(_INSTRUMENT_MASTER_URL, timeout=30)
++    resp.raise_for_status()
++    return resp.json()
++
++
++def _load_instrument_master() -> list:
++    """Disk-cached for 24h so we're not re-downloading a multi-MB file on
++    every process restart (Render free tier restarts often)."""
++    try:
++        if os.path.exists(_INSTRUMENT_CACHE_PATH):
++            age = datetime.utcnow() - datetime.utcfromtimestamp(os.path.getmtime(_INSTRUMENT_CACHE_PATH))
++            if age < _INSTRUMENT_CACHE_MAX_AGE:
++                with open(_INSTRUMENT_CACHE_PATH, "r") as f:
++                    return json.load(f)
++    except Exception as e:
++        logger.warning(f"Angel instrument cache read failed, re-downloading: {e}")
++
++    data = _download_instrument_master()
++    try:
++        with open(_INSTRUMENT_CACHE_PATH, "w") as f:
++            json.dump(data, f)
++    except Exception as e:
++        logger.warning(f"Could not write Angel instrument cache (non-fatal): {e}")
++    return data
++
++
++def _build_symbol_token_map() -> dict:
++    instruments = _load_instrument_master()
++    mapping = {}
++    for row in instruments:
++        # NSE equity rows look like {"token": "2885", "symbol": "RELIANCE-EQ",
++        # "name": "RELIANCE", "exch_seg": "NSE", "instrumenttype": "", ...}
++        if row.get("exch_seg") != "NSE":
++            continue
++        tradingsymbol = row.get("symbol", "")
++        if not tradingsymbol.endswith("-EQ"):
++            continue
++        bare = tradingsymbol[:-3]  # strip "-EQ"
++        mapping[bare] = (tradingsymbol, row.get("token"))
++    if not mapping:
++        raise RuntimeError("Angel instrument master parsed but produced an empty NSE equity map - check the response format.")
++    logger.info(f"Angel instrument map built: {len(mapping)} NSE equities.")
++    return mapping
++
++
++def _get_token(symbol: str) -> tuple:
++    global _symbol_token_map
++    with _map_lock:
++        if _symbol_token_map is None:
++            _symbol_token_map = _build_symbol_token_map()
++    bare = symbol[:-3] if symbol.endswith(".NS") else symbol
++    entry = _symbol_token_map.get(bare)
++    if entry is None:
++        raise KeyError(f"No Angel One symboltoken found for '{symbol}' - check spelling/whether it's actually an NSE equity.")
++    return entry
++
++
++def _get_session():
++    """Logs in once per process, reused across calls. Angel One sessions
++    expire (forced logout at midnight per their docs) - if a call fails
++    with an auth-looking error, the caller should call _reset_session()
++    and retry once."""
++    global _smart_api
++    with _session_lock:
++        if _smart_api is not None:
++            return _smart_api
++        from SmartApi import SmartConnect
++        import pyotp
++
++        if not (settings.ANGEL_API_KEY and settings.ANGEL_CLIENT_ID
++                and settings.ANGEL_PASSWORD and settings.ANGEL_TOTP_SECRET):
++            raise RuntimeError(
++                "PRICE_FEED=angel but ANGEL_API_KEY/ANGEL_CLIENT_ID/ANGEL_PASSWORD/"
++                "ANGEL_TOTP_SECRET are not all set."
++            )
++
++        api = SmartConnect(api_key=settings.ANGEL_API_KEY)
++        totp = pyotp.TOTP(settings.ANGEL_TOTP_SECRET).now()
++        session = api.generateSession(settings.ANGEL_CLIENT_ID, settings.ANGEL_PASSWORD, totp)
++        if not session.get("status"):
++            raise RuntimeError(f"Angel One login failed: {session}")
++        logger.info("Angel One data session established.")
++        _smart_api = api
++        return _smart_api
++
++
++def _reset_session():
++    global _smart_api
++    with _session_lock:
++        _smart_api = None
++
++
++def _fetch_ltp(symbol: str) -> dict:
++    tradingsymbol, token = _get_token(symbol)
++    api = _get_session()
++    try:
++        resp = api.ltpData("NSE", tradingsymbol, token)
++    except Exception:
++        # Could be an expired session - one retry with a fresh login.
++        _reset_session()
++        api = _get_session()
++        resp = api.ltpData("NSE", tradingsymbol, token)
++
++    if not resp.get("status"):
++        raise RuntimeError(f"Angel ltpData failed for {symbol}: {resp}")
++
++    d = resp["data"]
++    last_price = float(d["ltp"])
++    prev_close = float(d.get("close", last_price))  # 'close' here is prior session close per Angel's docs
++    return {
++        "symbol": symbol,
++        "last_price": round(last_price, 2),
++        "previous_close": round(prev_close, 2),
++        "day_high": round(float(d.get("high", last_price)), 2),
++        "day_low": round(float(d.get("low", last_price)), 2),
++        "change_pct": round((last_price - prev_close) / prev_close * 100, 2) if prev_close else 0.0,
++        "fetched_at": datetime.utcnow().isoformat(),
++    }
++
++
++def get_angel_ltp(symbol: str) -> dict:
++    """Same return shape as price_feed.get_live_price(), same 60s cache
++    behavior, so it's a drop-in swap wherever get_live_price() is called."""
++    now = datetime.utcnow()
++    cached = _price_cache.get(symbol)
++    if cached and (now - cached["fetched_at"]).total_seconds() < _CACHE_TTL_SECONDS:
++        return cached["data"]
++
++    data = _fetch_ltp(symbol)
++    _price_cache[symbol] = {"data": data, "fetched_at": now}
++    return data
+-- 
+2.43.0
+

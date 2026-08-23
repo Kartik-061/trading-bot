@@ -70,6 +70,21 @@ class YahooLiveFeed:
         self.prices[symbol] = price
         return price
 
+
+class AngelLiveFeed:
+    """Same interface as YahooLiveFeed - backed by Angel One SmartAPI market
+    data instead of yfinance. Data-only (never places orders), so it works
+    on Render's free tier without a static IP. Selected via PRICE_FEED=angel."""
+    def __init__(self, symbols: list):
+        self.prices = {}
+
+    def get_price(self, symbol: str) -> float:
+        from app.services.angel_feed import get_angel_ltp
+        data = get_angel_ltp(symbol)
+        price = data["last_price"]
+        self.prices[symbol] = price
+        return price
+
 class BotRunner:
     def __init__(self, user_id: int = None):
         self.user_id = user_id
@@ -145,7 +160,7 @@ class BotRunner:
         self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
         self.broker.connect()
 
-        self.feed = YahooLiveFeed(self.symbols)
+        self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
 
         try:
             while self.running:
