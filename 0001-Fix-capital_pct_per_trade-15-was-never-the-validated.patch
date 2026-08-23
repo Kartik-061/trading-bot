@@ -1,0 +1,42 @@
+From 77dbb754b621e617f8a282bffcfc93019fbedc39 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sun, 23 Aug 2026 12:36:01 +0000
+Subject: [PATCH] Fix capital_pct_per_trade: 15% was never the validated
+ number, 10% is
+
+STRATEGY_EVALUATION.md and tests/test_engine.py both confirm the
+actual backtest that produced the p=0.0008 headline result used 10%
+capital per trade (capital_pct_per_trade=0.1), not 15%. The 15%
+value only ever existed as engine.py's own function-signature default
+- a separate, never-validated number that happened to get copied into
+the live bot's config in an earlier fix. Corrected to match what was
+actually statistically tested.
+---
+ app/config.py | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/app/config.py b/app/config.py
+index bd7a4e4..35599bd 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -31,11 +31,12 @@ class Settings:
+     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
+     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
+ 
+-    # Position sizing - must match app/backtest/engine.py's defaults
+-    # (capital_pct_per_trade=0.15, implicit 5-position cap already enforced
+-    # in PaperBroker) so the live/paper bot actually trades the same sizing
+-    # scheme that was statistically validated, not a different untested one.
+-    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.15"))
++    # Position sizing - must match what STRATEGY_EVALUATION.md's p=0.0008
++    # result actually used (10%, confirmed by tests/test_engine.py's
++    # capital_pct_per_trade=0.1), NOT app/backtest/engine.py's own function
++    # default of 0.15 - that 0.15 was never the number the validated study
++    # ran with, it's just a later, separate default that drifted from it.
++    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.10"))
+ 
+     # API auth - if left empty, auth is skipped (convenient for local dev).
+     # MUST be set to a real random value before deploying anywhere public.
+-- 
+2.43.0
+

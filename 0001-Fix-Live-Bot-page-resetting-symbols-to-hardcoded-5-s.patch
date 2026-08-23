@@ -1,0 +1,89 @@
+From 16e40c0a5a90e97d33c751d1604d59df21bb260f Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sun, 23 Aug 2026 07:29:33 +0000
+Subject: [PATCH] Fix Live Bot page resetting symbols to hardcoded 5-symbol
+ default on every restart
+
+The Symbols field's initial state was hardcoded to
+"RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK" (5 symbols) and had no way to
+pick up whatever watchlist was actually last used - botStatusQuery
+only returns data while the bot is running, so it goes empty the
+moment you stop the bot, leaving the form stuck on that stale
+5-symbol default every single time you come back to restart with your
+real (e.g. 18-symbol) watchlist. Had to be retyped by hand every time.
+
+Fix: pull the most recently used symbol list (and strategy) from
+sessionsQuery() - BotSession history survives stop/start, unlike live
+status - and prefill the form from session history whenever the bot
+is idle and the user hasn't manually edited the field yet (same
+touched-ref guard pattern already used for startingCapital, so it
+never clobbers an in-progress edit). A genuinely brand-new user with
+no session history yet still sees the original 5-symbol default as a
+starting point.
+---
+ src/routes/live-bot.tsx | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/src/routes/live-bot.tsx b/src/routes/live-bot.tsx
+index 31b338f..1899679 100644
+--- a/src/routes/live-bot.tsx
++++ b/src/routes/live-bot.tsx
+@@ -9,7 +9,7 @@ import { toast } from "sonner";
+ import { ErrorState, Panel, SkeletonRows, Tag } from "@/components/kit";
+ import { PositionsTable } from "@/components/PositionsTable";
+ import { SignalsFeed } from "@/components/SignalsFeed";
+-import { botStatusQuery, screenerQuery } from "@/lib/queries";
++import { botStatusQuery, screenerQuery, sessionsQuery } from "@/lib/queries";
+ import { startBot, stopBot } from "@/lib/api";
+ import { duration, stamp } from "@/lib/format";
+ import { STRATEGIES } from "@/lib/strategies";
+@@ -41,12 +41,14 @@ function LiveBot() {
+   const qc = useQueryClient();
+   const status = useQuery(botStatusQuery());
+   const screener = useQuery(screenerQuery());
++  const sessions = useQuery(sessionsQuery());
+ 
+   const [strategy, setStrategy] = useState<string>("mean_reversion");
+   const [symbols, setSymbols] = useState("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK");
+   const [interval, setInterval] = useState("60");
+   const [startingCapital, setStartingCapital] = useState("100000");
+   const capitalTouched = useRef(false);
++  const symbolsTouched = useRef(false);
+ 
+   const invalidate = () => void qc.invalidateQueries({ queryKey: ["bot", "status"] });
+ 
+@@ -88,6 +90,19 @@ function LiveBot() {
+     setStartingCapital(String(statusCapital));
+   }, [running, statusCapital]);
+ 
++  // Same idea for symbols: botStatusQuery only reflects the CURRENT run, so
++  // it goes empty while the bot is stopped - leaving the form stuck on the
++  // hardcoded 5-symbol default every time you come back to restart it. The
++  // most recent session's symbol list survives stop/start, so use that
++  // instead as long as the user hasn't already edited the field.
++  const lastSessionSymbols = sessions.data?.[0]?.symbol as string | undefined;
++  const lastSessionStrategy = sessions.data?.[0]?.strategy as string | undefined;
++  useEffect(() => {
++    if (running || symbolsTouched.current) return;
++    if (lastSessionSymbols) setSymbols(lastSessionSymbols);
++    if (lastSessionStrategy) setStrategy(lastSessionStrategy);
++  }, [running, lastSessionSymbols, lastSessionStrategy]);
++
+ 
+ 
+   return (
+@@ -118,7 +133,10 @@ function LiveBot() {
+               <label className="label-xs block mb-1">Symbols (comma separated)</label>
+               <input
+                 value={symbols}
+-                onChange={(e) => setSymbols(e.target.value)}
++                onChange={(e) => {
++                  symbolsTouched.current = true;
++                  setSymbols(e.target.value);
++                }}
+                 className={fieldCls}
+               />
+             </div>
+-- 
+2.43.0
+

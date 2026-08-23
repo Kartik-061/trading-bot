@@ -31,11 +31,12 @@ class Settings:
     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "SBIFUNDS")
     DEFAULT_QTY = int(os.getenv("DEFAULT_QTY", "1"))
 
-    # Position sizing - must match app/backtest/engine.py's defaults
-    # (capital_pct_per_trade=0.15, implicit 5-position cap already enforced
-    # in PaperBroker) so the live/paper bot actually trades the same sizing
-    # scheme that was statistically validated, not a different untested one.
-    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.15"))
+    # Position sizing - must match what STRATEGY_EVALUATION.md's p=0.0008
+    # result actually used (10%, confirmed by tests/test_engine.py's
+    # capital_pct_per_trade=0.1), NOT app/backtest/engine.py's own function
+    # default of 0.15 - that 0.15 was never the number the validated study
+    # ran with, it's just a later, separate default that drifted from it.
+    CAPITAL_PCT_PER_TRADE = float(os.getenv("CAPITAL_PCT_PER_TRADE", "0.10"))
 
     # API auth - if left empty, auth is skipped (convenient for local dev).
     # MUST be set to a real random value before deploying anywhere public.
