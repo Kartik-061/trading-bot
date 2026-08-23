@@ -1,0 +1,74 @@
+From 882acd82b93f302f4d57e55e18d0c5ffe37a63f1 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 22 Aug 2026 21:18:29 +0000
+Subject: [PATCH] Remove hardcoded API key fallback from source
+
+VITE_API_KEY had a real fallback key hardcoded directly in api.ts,
+meaning it sat in plain text in public GitHub source and in the
+deployed JS bundle - anyone could extract it from browser devtools.
+
+Removed the fallback (now env-only, warns in console if missing) and
+added .env/.env.local to .gitignore plus a .env.example template so a
+real key never gets committed again.
+
+IMPORTANT - this alone doesn't undo the exposure of the old key, since
+it's already in git history forever. The old key should be rotated on
+Render (API_KEY env var) and the new value set as VITE_API_KEY in
+Lovable's env vars, or every request will start failing auth once this
+deploys.
+---
+ .env.example   |  5 +++++
+ .gitignore     |  5 +++++
+ src/lib/api.ts | 11 ++++++++++-
+ 3 files changed, 20 insertions(+), 1 deletion(-)
+ create mode 100644 .env.example
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..a657720
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,5 @@
++# Copy this file to .env.local and fill in real values.
++# Never commit .env or .env.local - they're gitignored on purpose.
++
++VITE_API_BASE_URL=https://trading-bot-s2zl.onrender.com/api
++VITE_API_KEY=your-api-key-here
+diff --git a/.gitignore b/.gitignore
+index d24df8a..1ca5209 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -30,3 +30,8 @@ dist-ssr
+ *.njsproj
+ *.sln
+ *.sw?
++
++# Env files - never commit real API keys/secrets
++.env
++.env.local
++.env.*.local
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 49f37aa..7e703c5 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -11,7 +11,16 @@ export const API_BASE_URL = (env["VITE_API_BASE_URL"] ?? "https://trading-bot-s2
+   /\/$/,
+   "",
+ );
+-export const API_KEY = env["VITE_API_KEY"] ?? "a34f179df723787a807717940a330d9284b21c0f70031fc2defddd8ac9b4d7dd";
++export const API_KEY = env["VITE_API_KEY"] ?? "";
++
++if (!API_KEY && typeof window !== "undefined") {
++  // eslint-disable-next-line no-console
++  console.warn(
++    "VITE_API_KEY is not set. Requests to the trading API will be sent " +
++      "without X-API-Key and will likely be rejected. Set VITE_API_KEY in " +
++      "this deployment's environment variables.",
++  );
++}
+ 
+ export class ApiError extends Error {
+   status: number;
+-- 
+2.43.0
+

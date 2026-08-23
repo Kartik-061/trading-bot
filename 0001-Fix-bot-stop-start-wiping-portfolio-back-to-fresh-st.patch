@@ -1,0 +1,93 @@
+From 4629bfeadcad91759653e8d9d01a9dd4d01b83c1 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sun, 23 Aug 2026 07:01:59 +0000
+Subject: [PATCH] Fix bot stop/start wiping portfolio back to fresh starting
+ capital
+
+PaperBroker.__init__ always set self.cash = starting_capital and
+self.positions = {} unconditionally, with zero memory of any prior
+trading. Since bot_runner.py's start() creates a brand-new PaperBroker
+every single time the bot is started (including every restart after a
+stop), stopping and restarting the bot silently reset the whole paper
+account back to Rs.1,00,000 and closed out all open positions - all
+prior gains/losses and holdings just vanished.
+
+Fix: added PaperBroker._restore_state(), called from __init__. If this
+user_id has any trade history, resume cash from the most recent
+trade's cash_after and rebuild positions by replaying every past trade
+in chronological order (same weighted-avg-price math place_order
+already uses for BUY, straight decrement for SELL). A genuinely
+brand-new user with no trade history still starts clean at
+starting_capital, unchanged.
+
+Verified with a standalone in-memory-DB simulation: BUY/SELL a
+session's worth of trades, then construct a second PaperBroker for the
+same user_id (simulating a stop+restart) and confirm cash and
+positions come back identical, not reset. All 17 existing tests still
+pass unmodified.
+---
+ app/broker/paper_broker.py | 43 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/app/broker/paper_broker.py b/app/broker/paper_broker.py
+index a5eb1ca..d992e93 100644
+--- a/app/broker/paper_broker.py
++++ b/app/broker/paper_broker.py
+@@ -20,12 +20,53 @@ class PaperBroker(BaseBroker):
+     def __init__(self, db: Session, starting_capital: float, strategy_name: str = "ema_rsi",
+                  user_id: int = None, max_concurrent_positions: int = 5):
+         self.db = db
+-        self.cash = starting_capital
+         self.starting_capital = starting_capital
+         self.positions = {}  # symbol -> {"qty": int, "avg_price": float}
+         self.strategy_name = strategy_name
+         self.user_id = user_id
+         self.max_concurrent_positions = max_concurrent_positions
++        self.cash = starting_capital
++        self._restore_state()
++
++    def _restore_state(self):
++        """Every stop/start cycle used to create a brand-new PaperBroker with
++        fresh starting_capital and empty positions - so stopping and
++        restarting the bot silently wiped out all prior gains/losses and
++        open positions, even though the account is meant to be one ongoing
++        paper-trading track record. Resume from trade history instead: if
++        this user has traded before, pick up cash from the last trade's
++        cash_after and rebuild positions by replaying every trade in order.
++        A genuinely brand-new user (no trades yet) still starts clean."""
++        if self.user_id is None:
++            return
++        past_trades = (
++            self.db.query(Trade)
++            .filter(Trade.user_id == self.user_id)
++            .order_by(Trade.timestamp.asc())
++            .all()
++        )
++        if not past_trades:
++            return
++
++        for t in past_trades:
++            pos = self.positions.get(t.symbol, {"qty": 0, "avg_price": 0.0})
++            if t.side == "BUY":
++                new_qty = pos["qty"] + t.qty
++                pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + (t.qty * t.price)) / new_qty
++                pos["qty"] = new_qty
++            elif t.side == "SELL":
++                pos["qty"] -= t.qty
++                if pos["qty"] <= 0:
++                    pos["qty"] = 0
++                    pos["avg_price"] = 0.0
++            self.positions[t.symbol] = pos
++
++        self.cash = past_trades[-1].cash_after
++        logger.info(
++            f"Resumed paper account for user_id={self.user_id} from {len(past_trades)} "
++            f"past trades: cash=Rs.{self.cash:,.2f}, "
++            f"open positions={[s for s, p in self.positions.items() if p['qty'] > 0]}"
++        )
+ 
+     def connect(self):
+         logger.info(f"Paper broker ready (user_id={self.user_id}). Starting capital: Rs.{self.cash:,.2f}")
+-- 
+2.43.0
+
