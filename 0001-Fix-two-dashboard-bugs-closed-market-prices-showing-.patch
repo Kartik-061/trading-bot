@@ -1,0 +1,147 @@
+From 53e6cd5fd34548bfb1f3eb9e1f58faeccb11c4d9 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sun, 23 Aug 2026 07:14:17 +0000
+Subject: [PATCH] Fix two dashboard bugs: closed-market prices showing Rs.0,
+ and closed positions counted as active
+
+Bug 1 - Portfolio Value collapsing to Cash Available whenever market
+is closed:
+When is_market_open() is False, the tick loop hits 'continue' before
+ever calling feed.get_price() for any symbol, so self.feed.prices
+stays empty. status()/_finalize() then built latest_prices as
+feed.prices.get(sym, 0) - defaulting every held position's price to
+Rs.0 - which portfolio_value() then treats as a fabricated 100% loss
+on every open position, not "price unknown". This is exactly what
+today's dashboard showed: Portfolio Value equal to Cash Available
+(holdings valued at nothing) and a scary -7.35% "loss" that wasn't
+real - the equity curve (built from PortfolioSnapshot rows written
+while market was actually open) correctly showed ~Rs.100,100.
+
+Fix: added BotRunner._latest_prices(), used by both status() and
+_finalize(). Falls back to the position's own avg_price when the live
+feed has no price for a symbol, instead of 0 - so a closed market
+shows a position at its last known real value, not wiped out.
+
+Bug 2 - Active Positions counting every symbol ever traded, not
+symbols currently held:
+place_order()'s SELL branch and _restore_state() both left a
+qty=0/avg_price=0.0 stub in self.positions when a position was fully
+closed, instead of removing the key. self.positions is returned
+directly by /me/bot/status and the frontend just does
+positions.length with no qty filter - so every symbol ever fully
+bought-and-sold kept inflating the Active Positions count forever,
+regardless of the max_concurrent_positions=5 cap actually being
+respected under the hood.
+
+Fix: pop the symbol from self.positions when a SELL brings qty to 0,
+in both place_order() and _restore_state(), instead of leaving a
+zero-qty entry. Trade DB logging is unaffected - Trade rows still get
+written the same way for every fill regardless of whether the
+resulting position was fully or partially closed.
+
+Verified with in-memory-DB simulations for both: (1) a symbol with no
+live price falls back to avg_price instead of 0, (2) a fully-closed
+position disappears from self.positions immediately and stays gone
+after a simulated restart, while a partial sell correctly keeps the
+reduced qty. All 17 existing tests still pass unmodified.
+---
+ app/bot_runner.py          | 24 +++++++++++++++++++++---
+ app/broker/paper_broker.py | 16 +++++++++++-----
+ 2 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index c322ad6..1d72afa 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -84,6 +84,24 @@ class BotRunner:
+         self.tick_seconds = 2
+         self.last_signal = {}
+ 
++    def _latest_prices(self) -> dict:
++        """Build the symbol->price map used for portfolio valuation. When
++        the live feed has no price yet for a symbol (most commonly: market
++        is closed, so the tick loop never called feed.get_price() this
++        session), falling back to 0 silently values any held position at
++        Rs.0 - that's not 'unknown price', it's a fabricated total loss on
++        that holding. Fall back to the position's own avg_price (what was
++        actually paid) instead, so a closed market shows the position at
++        its last known real value, not wiped out."""
++        prices = {}
++        for sym in self.symbols:
++            live = self.feed.prices.get(sym) if self.feed else None
++            if live:
++                prices[sym] = live
++            else:
++                prices[sym] = self.broker.positions.get(sym, {}).get("avg_price", 0) if self.broker else 0
++        return prices
++
+     def start(self, symbols: list = None, strategy_name: str = "ema_rsi", tick_seconds: float = 2, starting_capital: float = None):
+         if self.running:
+             return {"status": False, "reason": "already_running"}
+@@ -159,7 +177,7 @@ class BotRunner:
+                         # a fixed DEFAULT_QTY SELL could leave a stray
+                         # partial position sitting open instead of exiting.
+                         self.broker.place_order(symbol, signal, holding, price)
+-                latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
++                latest_prices = self._latest_prices()
+                 portfolio_value = self.broker.portfolio_value(latest_prices)
+                 db.add(PortfolioSnapshot(
+                     user_id=self.user_id,
+@@ -187,7 +205,7 @@ class BotRunner:
+             bot_session.ended_at = datetime.utcnow()
+             bot_session.status = status
+             if self.broker:
+-                latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
++                latest_prices = self._latest_prices()
+                 bot_session.final_value = self.broker.portfolio_value(latest_prices)
+             db.commit()
+ 
+@@ -202,7 +220,7 @@ class BotRunner:
+     def status(self):
+         if not self.running or not self.broker or (self.thread and not self.thread.is_alive()):
+             return {"running": False, "market_open": is_market_open()}
+-        latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
++        latest_prices = self._latest_prices()
+         db = SessionLocal()
+         bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
+         started_at = bot_session.started_at.isoformat() if bot_session else None
+diff --git a/app/broker/paper_broker.py b/app/broker/paper_broker.py
+index d992e93..b01c984 100644
+--- a/app/broker/paper_broker.py
++++ b/app/broker/paper_broker.py
+@@ -54,12 +54,13 @@ class PaperBroker(BaseBroker):
+                 new_qty = pos["qty"] + t.qty
+                 pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + (t.qty * t.price)) / new_qty
+                 pos["qty"] = new_qty
++                self.positions[t.symbol] = pos
+             elif t.side == "SELL":
+                 pos["qty"] -= t.qty
+                 if pos["qty"] <= 0:
+-                    pos["qty"] = 0
+-                    pos["avg_price"] = 0.0
+-            self.positions[t.symbol] = pos
++                    self.positions.pop(t.symbol, None)
++                else:
++                    self.positions[t.symbol] = pos
+ 
+         self.cash = past_trades[-1].cash_after
+         logger.info(
+@@ -106,8 +107,13 @@ class PaperBroker(BaseBroker):
+             self.cash += (cost - fees)
+             pos["qty"] -= qty
+             if pos["qty"] == 0:
+-                pos["avg_price"] = 0.0
+-            self.positions[symbol] = pos
++                # Fully closed - drop the entry rather than leaving a
++                # qty=0 stub. self.positions is what /me/bot/status and the
++                # frontend's Active Positions count read directly; a
++                # lingering zero-qty entry gets counted as "active" forever.
++                self.positions.pop(symbol, None)
++            else:
++                self.positions[symbol] = pos
+         else:
+             return {"status": False, "reason": "invalid_side"}
+ 
+-- 
+2.43.0
+

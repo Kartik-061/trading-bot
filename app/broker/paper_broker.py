@@ -54,12 +54,13 @@ class PaperBroker(BaseBroker):
                 new_qty = pos["qty"] + t.qty
                 pos["avg_price"] = ((pos["avg_price"] * pos["qty"]) + (t.qty * t.price)) / new_qty
                 pos["qty"] = new_qty
+                self.positions[t.symbol] = pos
             elif t.side == "SELL":
                 pos["qty"] -= t.qty
                 if pos["qty"] <= 0:
-                    pos["qty"] = 0
-                    pos["avg_price"] = 0.0
-            self.positions[t.symbol] = pos
+                    self.positions.pop(t.symbol, None)
+                else:
+                    self.positions[t.symbol] = pos
 
         self.cash = past_trades[-1].cash_after
         logger.info(
@@ -106,8 +107,13 @@ class PaperBroker(BaseBroker):
             self.cash += (cost - fees)
             pos["qty"] -= qty
             if pos["qty"] == 0:
-                pos["avg_price"] = 0.0
-            self.positions[symbol] = pos
+                # Fully closed - drop the entry rather than leaving a
+                # qty=0 stub. self.positions is what /me/bot/status and the
+                # frontend's Active Positions count read directly; a
+                # lingering zero-qty entry gets counted as "active" forever.
+                self.positions.pop(symbol, None)
+            else:
+                self.positions[symbol] = pos
         else:
             return {"status": False, "reason": "invalid_side"}
 

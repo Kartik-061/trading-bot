@@ -84,6 +84,24 @@ class BotRunner:
         self.tick_seconds = 2
         self.last_signal = {}
 
+    def _latest_prices(self) -> dict:
+        """Build the symbol->price map used for portfolio valuation. When
+        the live feed has no price yet for a symbol (most commonly: market
+        is closed, so the tick loop never called feed.get_price() this
+        session), falling back to 0 silently values any held position at
+        Rs.0 - that's not 'unknown price', it's a fabricated total loss on
+        that holding. Fall back to the position's own avg_price (what was
+        actually paid) instead, so a closed market shows the position at
+        its last known real value, not wiped out."""
+        prices = {}
+        for sym in self.symbols:
+            live = self.feed.prices.get(sym) if self.feed else None
+            if live:
+                prices[sym] = live
+            else:
+                prices[sym] = self.broker.positions.get(sym, {}).get("avg_price", 0) if self.broker else 0
+        return prices
+
     def start(self, symbols: list = None, strategy_name: str = "ema_rsi", tick_seconds: float = 2, starting_capital: float = None):
         if self.running:
             return {"status": False, "reason": "already_running"}
@@ -159,7 +177,7 @@ class BotRunner:
                         # a fixed DEFAULT_QTY SELL could leave a stray
                         # partial position sitting open instead of exiting.
                         self.broker.place_order(symbol, signal, holding, price)
-                latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+                latest_prices = self._latest_prices()
                 portfolio_value = self.broker.portfolio_value(latest_prices)
                 db.add(PortfolioSnapshot(
                     user_id=self.user_id,
@@ -187,7 +205,7 @@ class BotRunner:
             bot_session.ended_at = datetime.utcnow()
             bot_session.status = status
             if self.broker:
-                latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+                latest_prices = self._latest_prices()
                 bot_session.final_value = self.broker.portfolio_value(latest_prices)
             db.commit()
 
@@ -202,7 +220,7 @@ class BotRunner:
     def status(self):
         if not self.running or not self.broker or (self.thread and not self.thread.is_alive()):
             return {"running": False, "market_open": is_market_open()}
-        latest_prices = {sym: self.feed.prices.get(sym, 0) for sym in self.symbols}
+        latest_prices = self._latest_prices()
         db = SessionLocal()
         bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
         started_at = bot_session.started_at.isoformat() if bot_session else None
