@@ -1,0 +1,146 @@
+From 5e3cd22c4f319183360a4baa2b7fdc59196445c6 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Mon, 24 Aug 2026 03:57:12 +0000
+Subject: [PATCH] Fix bot crash cascading into an unhandled secondary crash on
+ a dropped DB connection
+
+Live crash observed today: Neon Postgres dropped an idle connection
+("SSL connection has been closed unexpectedly") during the periodic
+portfolio_snapshots write. That's expected occasionally with a
+serverless Postgres connection sitting open across a long-running bot
+session - it should not be fatal on its own. But two things made it
+much worse than a single missed snapshot:
+
+1. The failed db.commit() left the SQLAlchemy Session in a
+   "needs rollback" state. The outer except block then called
+   _finalize(db, status="crashed") reusing that same poisoned session
+   - which immediately raised PendingRollbackError on its very first
+   query, an unhandled exception that killed the thread before the
+   "crashed" status ever got written. The BotSession row was left
+   stuck showing "running" in the DB forever, even though the bot
+   process was dead (the exact zombie-session pattern that had already
+   been fixed for other cases, just not this path).
+
+Fix:
+- The tick loop's snapshot write is now wrapped in its own try/except:
+  on failure, log a warning, db.rollback(), and continue to the next
+  tick instead of ending the whole session over one transient DB
+  hiccup.
+- The outer crash handler now rolls back the session before calling
+  _finalize(), so _finalize's own query has a usable session to work
+  with in the common case.
+- _finalize() itself is now defensive: if the passed-in session still
+  fails (rollback wasn't enough - e.g. the underlying connection is
+  actually gone), it retries once with a brand-new SessionLocal() so
+  the "crashed" status still gets recorded rather than silently lost.
+
+All 17 existing tests still pass unmodified. Unrelated to today's
+Angel One work - this is a Neon/Postgres connection-resilience issue
+that would affect the bot regardless of price feed source.
+---
+ app/bot_runner.py | 79 +++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 62 insertions(+), 17 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 4c40648..3657ac9 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -194,18 +194,37 @@ class BotRunner:
+                         self.broker.place_order(symbol, signal, holding, price)
+                 latest_prices = self._latest_prices()
+                 portfolio_value = self.broker.portfolio_value(latest_prices)
+-                db.add(PortfolioSnapshot(
+-                    user_id=self.user_id,
+-                    session_id=self.session_id,
+-                    timestamp=datetime.utcnow(),
+-                    portfolio_value=portfolio_value,
+-                    cash=self.broker.cash,
+-                ))
+-                db.commit()
++                try:
++                    db.add(PortfolioSnapshot(
++                        user_id=self.user_id,
++                        session_id=self.session_id,
++                        timestamp=datetime.utcnow(),
++                        portfolio_value=portfolio_value,
++                        cash=self.broker.cash,
++                    ))
++                    db.commit()
++                except Exception as e:
++                    # A dropped DB connection (Neon closing an idle session,
++                    # a network blip) shouldn't take down the whole bot
++                    # session over one missed snapshot write. Roll back to
++                    # get the Session back to a usable state and try again
++                    # next tick - trades themselves (place_order's own
++                    # db.add/commit) get the same treatment implicitly since
++                    # a poisoned Session would have failed there too; this
++                    # keeps the loop itself alive either way.
++                    logger.warning(f"Portfolio snapshot write failed (user_id={self.user_id}), continuing: {e}")
++                    try:
++                        db.rollback()
++                    except Exception:
++                        pass
+                 time.sleep(self.tick_seconds)
+         except Exception as e:
+             logger.exception(f"Bot loop crashed (user_id={self.user_id}): {e}")
+-            self.running = False          # <-- YEH LINE ADD KI
++            self.running = False
++            try:
++                db.rollback()
++            except Exception:
++                pass
+             self._finalize(db, status="crashed")
+             db.close()
+             return
+@@ -215,14 +234,40 @@ class BotRunner:
+         return
+ 
+     def _finalize(self, db, status):
+-        bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
+-        if bot_session:
+-            bot_session.ended_at = datetime.utcnow()
+-            bot_session.status = status
+-            if self.broker:
+-                latest_prices = self._latest_prices()
+-                bot_session.final_value = self.broker.portfolio_value(latest_prices)
+-            db.commit()
++        """Marks the session ended. Uses the passed-in db session if it's
++        still usable, but falls back to a brand-new one if not - a session
++        that just crashed the tick loop (e.g. a dropped DB connection) may
++        be unrecoverable even after rollback(), and losing the "crashed"
++        status write means the session sits shown as forever-running in the
++        DB even though the bot process is actually dead."""
++        try:
++            bot_session = db.query(BotSession).filter(BotSession.id == self.session_id).first()
++            if bot_session:
++                bot_session.ended_at = datetime.utcnow()
++                bot_session.status = status
++                if self.broker:
++                    latest_prices = self._latest_prices()
++                    bot_session.final_value = self.broker.portfolio_value(latest_prices)
++                db.commit()
++            return
++        except Exception as e:
++            logger.warning(f"_finalize failed with the original db session, retrying with a fresh one: {e}")
++
++        try:
++            fresh_db = SessionLocal()
++            try:
++                bot_session = fresh_db.query(BotSession).filter(BotSession.id == self.session_id).first()
++                if bot_session:
++                    bot_session.ended_at = datetime.utcnow()
++                    bot_session.status = status
++                    if self.broker:
++                        latest_prices = self._latest_prices()
++                        bot_session.final_value = self.broker.portfolio_value(latest_prices)
++                    fresh_db.commit()
++            finally:
++                fresh_db.close()
++        except Exception as e:
++            logger.error(f"_finalize failed even with a fresh db session (user_id={self.user_id}): {e}")
+ 
+     def stop(self):
+         if not self.running:
+-- 
+2.43.0
+
