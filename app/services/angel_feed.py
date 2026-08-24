@@ -124,7 +124,17 @@ def _get_session():
             )
 
         api = SmartConnect(api_key=settings.ANGEL_API_KEY)
-        totp = pyotp.TOTP(settings.ANGEL_TOTP_SECRET).now()
+        totp_secret = settings.ANGEL_TOTP_SECRET.strip().replace(" ", "").upper()
+        try:
+            totp = pyotp.TOTP(totp_secret).now()
+        except Exception as e:
+            raise RuntimeError(
+                f"ANGEL_TOTP_SECRET doesn't look like a valid base32 TOTP secret "
+                f"(got a {len(totp_secret)}-char value). Re-copy it from the SmartAPI "
+                f"portal's 2FA/TOTP setup screen - it should be a short (usually "
+                f"16-32 char) string of only A-Z and 2-7, no spaces or '='. "
+                f"Original error: {e}"
+            )
         session = api.generateSession(settings.ANGEL_CLIENT_ID, settings.ANGEL_PASSWORD, totp)
         if not session.get("status"):
             raise RuntimeError(f"Angel One login failed: {session}")
