@@ -4,3 +4,5 @@ __pycache__/
 .env
 tradebot.db
 *.tar.gz
+# logzero's default log output, created at runtime when SmartApi is used
+logs/

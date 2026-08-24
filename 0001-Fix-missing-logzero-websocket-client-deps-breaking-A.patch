@@ -1,0 +1,58 @@
+From 0b114d471e50456bed6b78204584ef5d0e40b948 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Mon, 24 Aug 2026 04:36:36 +0000
+Subject: [PATCH] Fix missing logzero/websocket-client deps breaking Angel One
+ feed at runtime
+
+Deployed and tested PRICE_FEED=angel today - every symbol failed with
+"No module named 'logzero'". smartapi-python's own package metadata
+only declares requests, six, and python-dateutil as dependencies, but
+its actual source (smartConnect.py, smartApiWebsocket.py) imports
+logzero and websocket (websocket-client) directly - a packaging bug
+on smartapi-python's end, not something pip could have caught
+automatically from requirements.txt alone.
+
+Verified by inspecting the installed wheel's METADATA and grep'ing its
+source for the actual imports, then confirmed the fix by installing
+fresh and running the full import chain (SmartApi, pyotp, our
+angel_feed.py, AngelLiveFeed) plus actually instantiating SmartConnect
+- all clean now, generateSession/ltpData both present as methods.
+
+Added: logzero==1.7.0, websocket-client==1.8.0. All 17 tests still
+pass. This was a dependency-resolution bug, unrelated to the Angel
+One code itself - the AngelLiveFeed/angel_feed.py logic from the
+earlier commit is unchanged.
+---
+ .gitignore       | 4 +++-
+ requirements.txt | 2 ++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/.gitignore b/.gitignore
+index f99716c..9c3ea3d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,4 +3,6 @@ __pycache__/
+ *.pyc
+ .env
+ tradebot.db
+-*.tar.gz
+\ No newline at end of file
++*.tar.gz
++# logzero's default log output, created at runtime when SmartApi is used
++logs/
+diff --git a/requirements.txt b/requirements.txt
+index 1d736e4..931ec9d 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,6 +4,8 @@ sqlalchemy==2.0.35
+ pydantic==2.9.2
+ python-dotenv==1.0.1
+ smartapi-python==1.4.8
++logzero==1.7.0
++websocket-client==1.8.0
+ pyotp==2.9.0
+ pandas>=2.2.3
+ requests==2.32.3
+-- 
+2.43.0
+
