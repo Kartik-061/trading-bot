@@ -1,0 +1,158 @@
+From e4ab33e634c11f743ce4c9e4841ae14db5c52737 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Tue, 25 Aug 2026 04:20:16 +0000
+Subject: [PATCH] Fix backtest_batch/significance crashing on Yahoo's rate
+ limit for larger symbol batches
+
+Running a 43-symbol significance test hit
+yfinance.exceptions.YFRateLimitError - Yahoo's free/unofficial API
+rate-limits bursts of sequential requests with no built-in retry, and
+there'd already been a lot of yfinance traffic today (screener,
+research page, earlier backtests) from the same Render IP.
+
+Two problems compounded this:
+1. No retry logic at all - a transient rate-limit hit failed
+   immediately instead of backing off and trying again.
+2. backtest_batch/backtest_significance's except clauses only caught
+   ValueError (empty data) - a persistent failure after retries raised
+   a different error type that wasn't caught, crashing the entire
+   batch instead of just skipping that one symbol.
+
+Fix:
+- historical_data.py: added _fetch_history_with_retry() - retries up
+  to 3 times with widening backoff (5s/15s/30s) specifically on
+  YFRateLimitError, used by both fetch_historical_closes() and
+  fetch_historical_ohlcv(). Any other error still fails immediately
+  (a genuinely bad/delisted symbol shouldn't sit through pointless
+  retries). After retries are exhausted, raises a clear RuntimeError
+  explaining what happened instead of yfinance's raw exception.
+- routes.py: both batch and significance loops now catch
+  (ValueError, RuntimeError) instead of just ValueError, so one
+  persistently-failing symbol gets skipped (recorded as an error entry
+  / dropped from the pool) rather than crashing the whole request.
+  Also added a small 0.5s gap between symbols as cheap insurance
+  against tripping the rate limit in the first place.
+
+All 17 tests still pass. Import path verified (YFRateLimitError
+exists in the installed yfinance version).
+---
+ app/api/routes.py               | 13 ++++++----
+ app/backtest/historical_data.py | 42 +++++++++++++++++++++++++++++----
+ 2 files changed, 47 insertions(+), 8 deletions(-)
+
+diff --git a/app/api/routes.py b/app/api/routes.py
+index 0f5e463..9b59ff7 100644
+--- a/app/api/routes.py
++++ b/app/api/routes.py
+@@ -4,6 +4,7 @@ REST endpoints, same shape as BookIQ's DRF views: thin controllers,
+ real logic lives in bot_runner / backtest / broker modules.
+ """
+ from typing import Optional, Literal
++import time
+ from fastapi import APIRouter, Depends, Query, Request
+ from sqlalchemy.orm import Session
+ from sqlalchemy import desc
+@@ -181,10 +182,12 @@ def backtest_batch(request: Request, symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,
+     ]
+ 
+     results = []
+-    for symbol in symbol_list:
++    for i, symbol in enumerate(symbol_list):
++        if i > 0:
++            time.sleep(0.5)  # small gap between symbols - cheap insurance against Yahoo's rate limit
+         try:
+             prices = fetch_historical_closes(symbol, interval=interval, period=period)
+-        except ValueError as e:
++        except (ValueError, RuntimeError) as e:
+             results.append({"symbol": symbol, "error": str(e)})
+             continue
+ 
+@@ -239,13 +242,15 @@ def backtest_significance(request: Request, strategy: str = "ema_rsi", symbols:
+     symbol_list = [s.strip().upper() for s in symbols.split(",")]
+     symbol_data = {}
+ 
+-    for symbol in symbol_list:
++    for i, symbol in enumerate(symbol_list):
++        if i > 0:
++            time.sleep(0.5)
+         try:
+             if strategy == "volume_confirmed" or strategy == "breakout":
+                 symbol_data[symbol] = fetch_historical_ohlcv(symbol, interval=interval, period=period)
+             else:
+                 symbol_data[symbol] = fetch_historical_closes(symbol, interval=interval, period=period)
+-        except ValueError:
++        except (ValueError, RuntimeError):
+             continue  # skip symbols that failed to fetch, don't kill the whole test
+ 
+     if not symbol_data:
+diff --git a/app/backtest/historical_data.py b/app/backtest/historical_data.py
+index bd9b8a3..1d4f0ec 100644
+--- a/app/backtest/historical_data.py
++++ b/app/backtest/historical_data.py
+@@ -10,7 +10,43 @@ Limitation to know: Yahoo only keeps 5-minute-interval data for the last
+ 60 days. For longer history, use a bigger interval (e.g. "1d") but you'll
+ get far fewer candles for an intraday strategy to react to.
+ """
++import logging
++import time
++
+ import yfinance as yf
++from yfinance.exceptions import YFRateLimitError
++
++logger = logging.getLogger("historical_data")
++
++_MAX_RETRIES = 3
++_BACKOFF_SECONDS = [5, 15, 30]  # widening backoff, not a fixed retry delay
++
++
++def _fetch_history_with_retry(ticker_symbol: str, interval: str, period: str):
++    """Yahoo's free/unofficial API rate-limits bursts of sequential
++    requests - hit this for real running a 43-symbol batch backtest with
++    no delay between calls. Retries with widening backoff specifically on
++    YFRateLimitError; any other error still fails immediately (a genuinely
++    bad symbol shouldn't sit through 3 pointless retries)."""
++    ticker = yf.Ticker(ticker_symbol)
++    last_error = None
++    for attempt in range(_MAX_RETRIES):
++        try:
++            return ticker.history(interval=interval, period=period)
++        except YFRateLimitError as e:
++            last_error = e
++            if attempt < _MAX_RETRIES - 1:
++                wait = _BACKOFF_SECONDS[attempt]
++                logger.warning(
++                    f"Yahoo rate-limited fetching {ticker_symbol} "
++                    f"(attempt {attempt + 1}/{_MAX_RETRIES}), waiting {wait}s: {e}"
++                )
++                time.sleep(wait)
++    raise RuntimeError(
++        f"Yahoo Finance rate-limited {ticker_symbol} after {_MAX_RETRIES} retries. "
++        f"This usually means too many symbols were requested back-to-back - try a "
++        f"smaller batch, or wait a few minutes and retry. Original error: {last_error}"
++    )
+ 
+ 
+ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60d") -> list:
+@@ -22,8 +58,7 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
+     interval: "5m", "15m", "1h", "1d", etc (Yahoo's supported intervals).
+     period: how far back to pull. "60d" is the max Yahoo allows for 5m data.
+     """
+-    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+-    hist = ticker.history(interval=interval, period=period)
++    hist = _fetch_history_with_retry(f"{symbol.upper()}.NS", interval, period)
+ 
+     if hist.empty:
+         raise ValueError(
+@@ -39,8 +74,7 @@ def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d
+     what volume-aware strategies need. run_backtest() in engine.py accepts
+     either this format or the plain float list from fetch_historical_closes.
+     """
+-    ticker = yf.Ticker(f"{symbol.upper()}.NS")
+-    hist = ticker.history(interval=interval, period=period)
++    hist = _fetch_history_with_retry(f"{symbol.upper()}.NS", interval, period)
+ 
+     if hist.empty:
+         raise ValueError(
+-- 
+2.43.0
+

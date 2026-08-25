@@ -10,7 +10,43 @@ Limitation to know: Yahoo only keeps 5-minute-interval data for the last
 60 days. For longer history, use a bigger interval (e.g. "1d") but you'll
 get far fewer candles for an intraday strategy to react to.
 """
+import logging
+import time
+
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
+
+logger = logging.getLogger("historical_data")
+
+_MAX_RETRIES = 3
+_BACKOFF_SECONDS = [5, 15, 30]  # widening backoff, not a fixed retry delay
+
+
+def _fetch_history_with_retry(ticker_symbol: str, interval: str, period: str):
+    """Yahoo's free/unofficial API rate-limits bursts of sequential
+    requests - hit this for real running a 43-symbol batch backtest with
+    no delay between calls. Retries with widening backoff specifically on
+    YFRateLimitError; any other error still fails immediately (a genuinely
+    bad symbol shouldn't sit through 3 pointless retries)."""
+    ticker = yf.Ticker(ticker_symbol)
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return ticker.history(interval=interval, period=period)
+        except YFRateLimitError as e:
+            last_error = e
+            if attempt < _MAX_RETRIES - 1:
+                wait = _BACKOFF_SECONDS[attempt]
+                logger.warning(
+                    f"Yahoo rate-limited fetching {ticker_symbol} "
+                    f"(attempt {attempt + 1}/{_MAX_RETRIES}), waiting {wait}s: {e}"
+                )
+                time.sleep(wait)
+    raise RuntimeError(
+        f"Yahoo Finance rate-limited {ticker_symbol} after {_MAX_RETRIES} retries. "
+        f"This usually means too many symbols were requested back-to-back - try a "
+        f"smaller batch, or wait a few minutes and retry. Original error: {last_error}"
+    )
 
 
 def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60d") -> list:
@@ -22,8 +58,7 @@ def fetch_historical_closes(symbol: str, interval: str = "5m", period: str = "60
     interval: "5m", "15m", "1h", "1d", etc (Yahoo's supported intervals).
     period: how far back to pull. "60d" is the max Yahoo allows for 5m data.
     """
-    ticker = yf.Ticker(f"{symbol.upper()}.NS")
-    hist = ticker.history(interval=interval, period=period)
+    hist = _fetch_history_with_retry(f"{symbol.upper()}.NS", interval, period)
 
     if hist.empty:
         raise ValueError(
@@ -39,8 +74,7 @@ def fetch_historical_ohlcv(symbol: str, interval: str = "5m", period: str = "60d
     what volume-aware strategies need. run_backtest() in engine.py accepts
     either this format or the plain float list from fetch_historical_closes.
     """
-    ticker = yf.Ticker(f"{symbol.upper()}.NS")
-    hist = ticker.history(interval=interval, period=period)
+    hist = _fetch_history_with_retry(f"{symbol.upper()}.NS", interval, period)
 
     if hist.empty:
         raise ValueError(

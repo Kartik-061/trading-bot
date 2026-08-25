@@ -4,6 +4,7 @@ REST endpoints, same shape as BookIQ's DRF views: thin controllers,
 real logic lives in bot_runner / backtest / broker modules.
 """
 from typing import Optional, Literal
+import time
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -181,10 +182,12 @@ def backtest_batch(request: Request, symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,
     ]
 
     results = []
-    for symbol in symbol_list:
+    for i, symbol in enumerate(symbol_list):
+        if i > 0:
+            time.sleep(0.5)  # small gap between symbols - cheap insurance against Yahoo's rate limit
         try:
             prices = fetch_historical_closes(symbol, interval=interval, period=period)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             results.append({"symbol": symbol, "error": str(e)})
             continue
 
@@ -239,13 +242,15 @@ def backtest_significance(request: Request, strategy: str = "ema_rsi", symbols: 
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
     symbol_data = {}
 
-    for symbol in symbol_list:
+    for i, symbol in enumerate(symbol_list):
+        if i > 0:
+            time.sleep(0.5)
         try:
             if strategy == "volume_confirmed" or strategy == "breakout":
                 symbol_data[symbol] = fetch_historical_ohlcv(symbol, interval=interval, period=period)
             else:
                 symbol_data[symbol] = fetch_historical_closes(symbol, interval=interval, period=period)
-        except ValueError:
+        except (ValueError, RuntimeError):
             continue  # skip symbols that failed to fetch, don't kill the whole test
 
     if not symbol_data:
