@@ -1,0 +1,93 @@
+From 1789e8c47de8764758aa93d3f7ba4e354d416a8d Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Tue, 25 Aug 2026 09:36:13 +0000
+Subject: [PATCH] Fix Angel One ltpData wrong response-key check + missed
+ auto-relogin on expired token
+
+Live logs today (Aug 25) showed every single ltpData call failing with
+"errorCode: AG8001, message: Invalid Token" - confirmed two real bugs
+by reading SmartApi's actual source and the real error response:
+
+1. Wrong key checked: ltpData responses use "success" as their status
+   field ({'success': False, 'message': 'Invalid Token', 'errorCode':
+   'AG8001', 'data': ''} - straight from today's logs), not "status"
+   (that's the convention for a different endpoint, placeOrder, per
+   smartConnect.py's own source). The old code checked resp.get("status")
+   - always None/falsy for ltpData responses regardless of whether the
+   call actually succeeded, so it would have misreported even a
+   genuine success as a failure.
+
+2. The existing "reset session and retry once" logic only triggered
+   inside an except block around a raised Python exception - but an
+   expired/invalid token comes back from ltpData as a normal
+   success:False dict, not a raised exception. So that safety net
+   never actually engaged for this exact failure mode, which is
+   presumably the most common one (Angel force-logs-out sessions
+   daily, and this cached-session design is built to span days of
+   process uptime).
+
+Fix: check "success" (the correct key, confirmed from the real
+response), and explicitly detect an auth-type failure (errorCode
+AG8001/AG8002, or "token"/"session" in the message) to trigger a
+fresh login + one retry - not just on raised exceptions. A genuinely
+different failure (bad symbol, etc.) still raises immediately without
+a pointless retry.
+
+Verified with mocked SmartConnect responses covering all three paths:
+clean success (no retry triggered), the exact AG8001-then-success
+sequence from today's real logs (retry triggers, retried result used),
+and a persistent non-auth error (raises immediately, doesn't loop).
+All 17 existing tests still pass.
+---
+ app/services/angel_feed.py | 25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index caa0079..6f2d622 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -149,18 +149,39 @@ def _reset_session():
+         _smart_api = None
+ 
+ 
++_AUTH_ERROR_CODES = {"AG8001", "AG8002"}  # Invalid Token / Token expired, per Angel's error codes
++
++
++def _is_auth_error(resp: dict) -> bool:
++    if resp.get("errorCode") in _AUTH_ERROR_CODES:
++        return True
++    msg = str(resp.get("message", "")).lower()
++    return "token" in msg or "session" in msg
++
++
+ def _fetch_ltp(symbol: str) -> dict:
+     tradingsymbol, token = _get_token(symbol)
+     api = _get_session()
+     try:
+         resp = api.ltpData("NSE", tradingsymbol, token)
++        retried = False
+     except Exception:
+-        # Could be an expired session - one retry with a fresh login.
++        resp = None
++        retried = False
++
++    # ltpData responses use "success" as their status key (confirmed from a
++    # live AG8001 response), NOT "status" - that's a different endpoint's
++    # convention (e.g. placeOrder). An expired/invalid token comes back as a
++    # normal success:False dict here, not a raised exception, so it has to
++    # be checked explicitly rather than relying on the except block above.
++    if resp is None or (not resp.get("success") and _is_auth_error(resp) and not retried):
++        logger.warning(f"Angel session looks invalid/expired for {symbol} ({resp}), re-logging in and retrying once.")
+         _reset_session()
+         api = _get_session()
+         resp = api.ltpData("NSE", tradingsymbol, token)
++        retried = True
+ 
+-    if not resp.get("status"):
++    if not resp.get("success"):
+         raise RuntimeError(f"Angel ltpData failed for {symbol}: {resp}")
+ 
+     d = resp["data"]
+-- 
+2.43.0
+

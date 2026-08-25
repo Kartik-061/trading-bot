@@ -149,18 +149,39 @@ def _reset_session():
         _smart_api = None
 
 
+_AUTH_ERROR_CODES = {"AG8001", "AG8002"}  # Invalid Token / Token expired, per Angel's error codes
+
+
+def _is_auth_error(resp: dict) -> bool:
+    if resp.get("errorCode") in _AUTH_ERROR_CODES:
+        return True
+    msg = str(resp.get("message", "")).lower()
+    return "token" in msg or "session" in msg
+
+
 def _fetch_ltp(symbol: str) -> dict:
     tradingsymbol, token = _get_token(symbol)
     api = _get_session()
     try:
         resp = api.ltpData("NSE", tradingsymbol, token)
+        retried = False
     except Exception:
-        # Could be an expired session - one retry with a fresh login.
+        resp = None
+        retried = False
+
+    # ltpData responses use "success" as their status key (confirmed from a
+    # live AG8001 response), NOT "status" - that's a different endpoint's
+    # convention (e.g. placeOrder). An expired/invalid token comes back as a
+    # normal success:False dict here, not a raised exception, so it has to
+    # be checked explicitly rather than relying on the except block above.
+    if resp is None or (not resp.get("success") and _is_auth_error(resp) and not retried):
+        logger.warning(f"Angel session looks invalid/expired for {symbol} ({resp}), re-logging in and retrying once.")
         _reset_session()
         api = _get_session()
         resp = api.ltpData("NSE", tradingsymbol, token)
+        retried = True
 
-    if not resp.get("status"):
+    if not resp.get("success"):
         raise RuntimeError(f"Angel ltpData failed for {symbol}: {resp}")
 
     d = resp["data"]
