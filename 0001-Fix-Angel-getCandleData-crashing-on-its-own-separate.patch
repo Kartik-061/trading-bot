@@ -1,0 +1,108 @@
+From 813557149192440a2f20de2998ed5f21be9ffe78 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 09:52:10 +0000
+Subject: [PATCH] Fix Angel getCandleData crashing on its own separate rate
+ limit + missing time import
+
+Live crash today (Aug 26): SmartApi.smartExceptions.DataException:
+"Couldn't parse the JSON response received from the server: b'Access
+denied because of exceeding access rate'" - an unhandled exception
+that propagated all the way up through FastAPI's routing and crashed
+the request. Angel One's historical-data endpoint (getCandleData) has
+its own separate rate limit from ltpData's, and it comes back as raw
+non-JSON text on a rate-limit hit, which SmartApi's own library can't
+parse and raises as DataException - a completely different failure
+shape from ltpData's success:False dict responses, so none of the
+existing auth-error handling caught it.
+
+Also caught and fixed in the same pass: _call_candle_data_with_retry
+uses time.sleep() for backoff, but this file never actually imported
+the `time` module - would have been an immediate NameError crash the
+very first time this code path ran for real (only caught now because
+this session's mock tests actually exercise the sleep call, unlike
+yesterday's tests which didn't hit this function).
+
+Fix: added _call_candle_data_with_retry() - retries getCandleData up
+to 3 times with widening backoff (3s/8s/20s) specifically on
+DataException, same pattern as the existing Yahoo rate-limit retry
+logic. After retries are exhausted, raises a clear RuntimeError
+(already caught by the /discover/stock-chart route handler) instead
+of an unhandled exception reaching FastAPI's routing layer.
+
+Verified: mocked DataException-then-success (retries, succeeds on 2nd
+attempt) and persistent-failure (raises a clear RuntimeError after 3
+retries) scenarios, both pass. All 17 existing tests still pass.
+---
+ app/services/angel_feed.py | 38 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 49d163a..507f81b 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -24,6 +24,7 @@ import json
+ import logging
+ import os
+ import threading
++import time
+ from datetime import datetime, timedelta
+ 
+ import requests
+@@ -211,6 +212,38 @@ _PERIOD_TO_DAYS = {
+ }
+ 
+ 
++_CANDLE_MAX_RETRIES = 3
++_CANDLE_BACKOFF_SECONDS = [3, 8, 20]
++
++
++def _call_candle_data_with_retry(api, params: dict, symbol: str) -> dict:
++    """Angel's historical-data endpoint has its own separate rate limit from
++    ltpData's - hit this live: 'Access denied because of exceeding access
++    rate' comes back as raw text, not JSON, which SmartApi's own library
++    can't parse and raises as DataException (an exception, not a
++    success:False dict like the auth-error case) - so it needs its own
++    except block, not just a resp.get() check."""
++    from SmartApi.smartExceptions import DataException
++
++    last_error = None
++    for attempt in range(_CANDLE_MAX_RETRIES):
++        try:
++            return api.getCandleData(params)
++        except DataException as e:
++            last_error = e
++            if attempt < _CANDLE_MAX_RETRIES - 1:
++                wait = _CANDLE_BACKOFF_SECONDS[attempt]
++                logger.warning(
++                    f"Angel getCandleData rate-limited fetching {symbol} "
++                    f"(attempt {attempt + 1}/{_CANDLE_MAX_RETRIES}), waiting {wait}s: {e}"
++                )
++                time.sleep(wait)
++    raise RuntimeError(
++        f"Angel One's historical-data API rate-limited {symbol} after {_CANDLE_MAX_RETRIES} retries. "
++        f"Try again in a minute, or fewer chart requests back-to-back. Original error: {last_error}"
++    )
++
++
+ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+     """Daily OHLC candles via Angel One's getCandleData - same output shape
+     ({time, open, high, low, close}, Lightweight-Charts-ready) as
+@@ -233,12 +266,13 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+     }
+ 
+     api = _get_session()
+-    resp = api.getCandleData(params)
++    resp = _call_candle_data_with_retry(api, params, symbol)
++
+     if not _is_success(resp) and _is_auth_error(resp):
+         logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
+         _reset_session()
+         api = _get_session()
+-        resp = api.getCandleData(params)
++        resp = _call_candle_data_with_retry(api, params, symbol)
+ 
+     if not _is_success(resp):
+         raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
+-- 
+2.43.0
+

@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -211,6 +212,38 @@ _PERIOD_TO_DAYS = {
 }
 
 
+_CANDLE_MAX_RETRIES = 3
+_CANDLE_BACKOFF_SECONDS = [3, 8, 20]
+
+
+def _call_candle_data_with_retry(api, params: dict, symbol: str) -> dict:
+    """Angel's historical-data endpoint has its own separate rate limit from
+    ltpData's - hit this live: 'Access denied because of exceeding access
+    rate' comes back as raw text, not JSON, which SmartApi's own library
+    can't parse and raises as DataException (an exception, not a
+    success:False dict like the auth-error case) - so it needs its own
+    except block, not just a resp.get() check."""
+    from SmartApi.smartExceptions import DataException
+
+    last_error = None
+    for attempt in range(_CANDLE_MAX_RETRIES):
+        try:
+            return api.getCandleData(params)
+        except DataException as e:
+            last_error = e
+            if attempt < _CANDLE_MAX_RETRIES - 1:
+                wait = _CANDLE_BACKOFF_SECONDS[attempt]
+                logger.warning(
+                    f"Angel getCandleData rate-limited fetching {symbol} "
+                    f"(attempt {attempt + 1}/{_CANDLE_MAX_RETRIES}), waiting {wait}s: {e}"
+                )
+                time.sleep(wait)
+    raise RuntimeError(
+        f"Angel One's historical-data API rate-limited {symbol} after {_CANDLE_MAX_RETRIES} retries. "
+        f"Try again in a minute, or fewer chart requests back-to-back. Original error: {last_error}"
+    )
+
+
 def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
     """Daily OHLC candles via Angel One's getCandleData - same output shape
     ({time, open, high, low, close}, Lightweight-Charts-ready) as
@@ -233,12 +266,13 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
     }
 
     api = _get_session()
-    resp = api.getCandleData(params)
+    resp = _call_candle_data_with_retry(api, params, symbol)
+
     if not _is_success(resp) and _is_auth_error(resp):
         logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
         _reset_session()
         api = _get_session()
-        resp = api.getCandleData(params)
+        resp = _call_candle_data_with_retry(api, params, symbol)
 
     if not _is_success(resp):
         raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
