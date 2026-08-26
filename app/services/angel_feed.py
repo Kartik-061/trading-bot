@@ -152,8 +152,19 @@ def _reset_session():
 _AUTH_ERROR_CODES = {"AG8001", "AG8002"}  # Invalid Token / Token expired, per Angel's error codes
 
 
+def _is_success(resp: dict) -> bool:
+    # Real responses seen in production use different key shapes for
+    # success: {'status': True, 'errorcode': '', ...} (genuine success,
+    # Aug 25) vs {'success': False, 'errorCode': 'AG8001', ...} (auth
+    # failure, Aug 24) - different key name AND different casing on the
+    # error-code field between the two. Check both rather than betting on
+    # one shape and silently misreporting the other as a failure.
+    return resp.get("status") is True or resp.get("success") is True
+
+
 def _is_auth_error(resp: dict) -> bool:
-    if resp.get("errorCode") in _AUTH_ERROR_CODES:
+    code = resp.get("errorCode") or resp.get("errorcode") or ""
+    if code in _AUTH_ERROR_CODES:
         return True
     msg = str(resp.get("message", "")).lower()
     return "token" in msg or "session" in msg
@@ -169,19 +180,14 @@ def _fetch_ltp(symbol: str) -> dict:
         resp = None
         retried = False
 
-    # ltpData responses use "success" as their status key (confirmed from a
-    # live AG8001 response), NOT "status" - that's a different endpoint's
-    # convention (e.g. placeOrder). An expired/invalid token comes back as a
-    # normal success:False dict here, not a raised exception, so it has to
-    # be checked explicitly rather than relying on the except block above.
-    if resp is None or (not resp.get("success") and _is_auth_error(resp) and not retried):
+    if resp is None or (not _is_success(resp) and _is_auth_error(resp) and not retried):
         logger.warning(f"Angel session looks invalid/expired for {symbol} ({resp}), re-logging in and retrying once.")
         _reset_session()
         api = _get_session()
         resp = api.ltpData("NSE", tradingsymbol, token)
         retried = True
 
-    if not resp.get("success"):
+    if not _is_success(resp):
         raise RuntimeError(f"Angel ltpData failed for {symbol}: {resp}")
 
     d = resp["data"]

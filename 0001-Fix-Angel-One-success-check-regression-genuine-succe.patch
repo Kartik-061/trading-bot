@@ -1,0 +1,83 @@
+From 299495d2d2297506d9a998a2fef6bf9b46549fd8 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 03:38:28 +0000
+Subject: [PATCH] Fix Angel One success-check regression: genuine successes
+ were being logged as failures
+
+Yesterday's fix checked resp.get("success") based on one observed
+AG8001 auth-error response shape. Today's real logs showed the actual
+regression: a genuinely successful ltpData call - real prices in the
+data, message: "SUCCESS" - came back as {'status': True, 'errorcode':
+'', ...}, no "success" key at all. Checking only "success" meant every
+real success was misreported as "Angel ltpData failed", flooding the
+logs with false warnings even though live prices were coming through
+fine.
+
+Angel One's own responses aren't consistent between shapes: yesterday's
+auth failure used {'success': False, 'errorCode': 'AG8001', ...},
+today's genuine success used {'status': True, 'errorcode': '', ...} -
+different key name for the flag AND different casing for the error
+code field. Fixed by checking both:
+- _is_success(resp): status is True OR success is True
+- _is_auth_error(resp): errorCode OR errorcode (either casing) in the
+  known auth-error codes, or "token"/"session" in the message
+
+Verified with the exact two real response payloads pulled from
+production logs (today's genuine success, yesterday's AG8001 auth
+error) - both now handled correctly: success is recognized as success
+with no false retry, and the auth error still correctly triggers a
+session reset + retry. All 17 existing tests still pass.
+---
+ app/services/angel_feed.py | 22 ++++++++++++++--------
+ 1 file changed, 14 insertions(+), 8 deletions(-)
+
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 6f2d622..1336c38 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -152,8 +152,19 @@ def _reset_session():
+ _AUTH_ERROR_CODES = {"AG8001", "AG8002"}  # Invalid Token / Token expired, per Angel's error codes
+ 
+ 
++def _is_success(resp: dict) -> bool:
++    # Real responses seen in production use different key shapes for
++    # success: {'status': True, 'errorcode': '', ...} (genuine success,
++    # Aug 25) vs {'success': False, 'errorCode': 'AG8001', ...} (auth
++    # failure, Aug 24) - different key name AND different casing on the
++    # error-code field between the two. Check both rather than betting on
++    # one shape and silently misreporting the other as a failure.
++    return resp.get("status") is True or resp.get("success") is True
++
++
+ def _is_auth_error(resp: dict) -> bool:
+-    if resp.get("errorCode") in _AUTH_ERROR_CODES:
++    code = resp.get("errorCode") or resp.get("errorcode") or ""
++    if code in _AUTH_ERROR_CODES:
+         return True
+     msg = str(resp.get("message", "")).lower()
+     return "token" in msg or "session" in msg
+@@ -169,19 +180,14 @@ def _fetch_ltp(symbol: str) -> dict:
+         resp = None
+         retried = False
+ 
+-    # ltpData responses use "success" as their status key (confirmed from a
+-    # live AG8001 response), NOT "status" - that's a different endpoint's
+-    # convention (e.g. placeOrder). An expired/invalid token comes back as a
+-    # normal success:False dict here, not a raised exception, so it has to
+-    # be checked explicitly rather than relying on the except block above.
+-    if resp is None or (not resp.get("success") and _is_auth_error(resp) and not retried):
++    if resp is None or (not _is_success(resp) and _is_auth_error(resp) and not retried):
+         logger.warning(f"Angel session looks invalid/expired for {symbol} ({resp}), re-logging in and retrying once.")
+         _reset_session()
+         api = _get_session()
+         resp = api.ltpData("NSE", tradingsymbol, token)
+         retried = True
+ 
+-    if not resp.get("success"):
++    if not _is_success(resp):
+         raise RuntimeError(f"Angel ltpData failed for {symbol}: {resp}")
+ 
+     d = resp["data"]
+-- 
+2.43.0
+
