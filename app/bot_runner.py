@@ -126,13 +126,31 @@ class BotRunner:
             return {"status": False, "reason": f"unknown_strategy: {strategy_name}"}
 
         symbols = symbols or list(DEFAULT_WATCHLIST.keys())
+        session_starting_capital = starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL
 
         db = SessionLocal()
+
+        # The TRUE "since inception" baseline is the very first session this
+        # user ever ran, not whatever gets passed to this particular
+        # start() call. broker.cash/positions already correctly resume
+        # across restarts (_restore_state()) - but self.starting_capital
+        # was always reset fresh here, so total_return_pct in status() was
+        # comparing the real resumed portfolio value against a fake reset
+        # baseline every time, producing a bogus "instant profit" on every
+        # restart that had nothing to do with actual performance.
+        first_session = (
+            db.query(BotSession)
+            .filter(BotSession.user_id == self.user_id)
+            .order_by(BotSession.started_at.asc())
+            .first()
+        )
+        inception_starting_capital = first_session.starting_capital if first_session else session_starting_capital
+
         bot_session = BotSession(
             started_at=datetime.utcnow(),
             symbol=",".join(symbols),
             strategy_name=strategy_name,
-            starting_capital=starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL,
+            starting_capital=session_starting_capital,
             is_live=(settings.MODE == "live"),
             status="running",
             user_id=self.user_id,
@@ -148,7 +166,7 @@ class BotRunner:
         self.strategies = {sym: strategy_cls() for sym in symbols}
         self.tick_seconds = tick_seconds
         self.last_signal = {sym: "HOLD" for sym in symbols}
-        self.starting_capital = starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL
+        self.starting_capital = inception_starting_capital
         self.running = True
 
         self.thread = threading.Thread(target=self._run_loop, daemon=True)

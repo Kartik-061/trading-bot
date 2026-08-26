@@ -1,0 +1,95 @@
+From c641a0aea65316535729a52eecd9ac24f7bd73e9 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 19:51:34 +0000
+Subject: [PATCH] Fix Total Return showing a bogus instant gain on every bot
+ restart
+
+Reported today: Dashboard showed "Total Return: +19.06% since
+inception" and a matching "+Rs.19,064" the instant the bot was
+restarted - even though the equity curve chart (built from real
+PortfolioSnapshot history) was visibly trending DOWN, not up. A clear
+contradiction between the chart and the summary card.
+
+Root cause: self.starting_capital (used by status() to compute
+total_return_pct and day_pnl) was always reset fresh to whatever got
+passed to start() - typically settings.PAPER_STARTING_CAPITAL
+(Rs.100,000) or the Live Bot form's "Starting Capital" field default -
+every single time the bot started, completely disconnected from
+broker.cash/positions, which DO correctly resume real history via
+_restore_state() (fixed in an earlier session). So total_return_pct
+was computing (real resumed portfolio value - a fake reset baseline)
+every restart, producing a bogus "instant profit" that had nothing to
+do with actual performance - it was purely an artifact of comparing
+a real number against the wrong baseline.
+
+Fix: start() now looks up the very first-ever BotSession for this
+user_id (ordered by started_at ascending) and uses ITS
+starting_capital as the permanent "since inception" baseline,
+regardless of what gets passed to this particular start() call. A
+genuinely brand-new user (no prior session) still starts fresh with
+whatever capital they specify, unchanged. The new BotSession DB row
+still records this session's own nominal starting_capital as before
+(informational per-session record) - only the in-memory
+self.starting_capital used for return calculations now reflects the
+true inception baseline.
+
+Verified end-to-end with an in-memory test DB: session 1 establishes
+a Rs.100,000 baseline; session 2 (simulating a restart) passes a
+deliberately different Rs.250,000 but correctly ends up with
+self.starting_capital == 100,000 (the true first-session baseline),
+not 250,000. Separately verified a genuinely new user_id with no
+prior sessions still starts fresh with whatever capital they specify.
+All 17 existing tests still pass.
+---
+ app/bot_runner.py | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 3657ac9..913d5f3 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -126,13 +126,31 @@ class BotRunner:
+             return {"status": False, "reason": f"unknown_strategy: {strategy_name}"}
+ 
+         symbols = symbols or list(DEFAULT_WATCHLIST.keys())
++        session_starting_capital = starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL
+ 
+         db = SessionLocal()
++
++        # The TRUE "since inception" baseline is the very first session this
++        # user ever ran, not whatever gets passed to this particular
++        # start() call. broker.cash/positions already correctly resume
++        # across restarts (_restore_state()) - but self.starting_capital
++        # was always reset fresh here, so total_return_pct in status() was
++        # comparing the real resumed portfolio value against a fake reset
++        # baseline every time, producing a bogus "instant profit" on every
++        # restart that had nothing to do with actual performance.
++        first_session = (
++            db.query(BotSession)
++            .filter(BotSession.user_id == self.user_id)
++            .order_by(BotSession.started_at.asc())
++            .first()
++        )
++        inception_starting_capital = first_session.starting_capital if first_session else session_starting_capital
++
+         bot_session = BotSession(
+             started_at=datetime.utcnow(),
+             symbol=",".join(symbols),
+             strategy_name=strategy_name,
+-            starting_capital=starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL,
++            starting_capital=session_starting_capital,
+             is_live=(settings.MODE == "live"),
+             status="running",
+             user_id=self.user_id,
+@@ -148,7 +166,7 @@ class BotRunner:
+         self.strategies = {sym: strategy_cls() for sym in symbols}
+         self.tick_seconds = tick_seconds
+         self.last_signal = {sym: "HOLD" for sym in symbols}
+-        self.starting_capital = starting_capital if starting_capital is not None else settings.PAPER_STARTING_CAPITAL
++        self.starting_capital = inception_starting_capital
+         self.running = True
+ 
+         self.thread = threading.Thread(target=self._run_loop, daemon=True)
+-- 
+2.43.0
+
