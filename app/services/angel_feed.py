@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import requests
 
 from app.config import settings
+from app.cache import ttl_cache
 
 logger = logging.getLogger("angel_feed")
 
@@ -281,6 +282,7 @@ def _call_candle_data_with_retry(api, params: dict, symbol: str) -> dict:
     )
 
 
+@ttl_cache(ttl_seconds=900)
 def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
     """Daily OHLC candles via Angel One's getCandleData - same output shape
     ({time, open, high, low, close}, Lightweight-Charts-ready) as

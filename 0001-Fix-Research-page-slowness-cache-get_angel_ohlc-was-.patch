@@ -1,0 +1,60 @@
+From 21aa38b3aeb4d110726b21a25d3e5478b3156129 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 10:12:35 +0000
+Subject: [PATCH] Fix Research page slowness: cache get_angel_ohlc, was
+ fetching fresh every single view
+
+Reported today: Research page (and anywhere using stock-chart) felt
+generally slow after the Angel migration. Root cause: get_angel_ohlc
+had no caching at all - every chart view, every period switch
+(1mo/3mo/1y/5y), every repeated look at the same stock triggered a
+fresh call to Angel's historical-data endpoint, which has its own
+separate, easy-to-trip rate limit (already fixed to retry with
+backoff rather than crash, but a 3-20+ second backoff wait is still
+very perceptible as "slow" from the user's side).
+
+Fix: added @ttl_cache(ttl_seconds=900) (same decorator, same 15-minute
+TTL already used for the yfinance-based fetch_multi_period screener
+cache) to get_angel_ohlc. Daily candle data barely changes intraday
+except today's still-forming candle, so a 15-minute cache is a
+reasonable tradeoff between freshness and not hammering an
+easily-rate-limited endpoint on every click.
+
+get_angel_ltp already had its own separate 60s cache (_price_cache) -
+unaffected, still fine as is.
+
+Verified: repeated calls for the same symbol+period hit the cache
+(only 1 real API call across 2 identical requests), a different
+period correctly triggers a fresh fetch (separate cache key), and a
+failure that exhausts all retries is correctly NOT cached - a
+transient rate-limit hit won't get "stuck" returning a cached failure
+on the next attempt, since ttl_cache only stores successful returns
+(the exception propagates before the cache-write line ever runs).
+All 17 existing tests still pass.
+---
+ app/services/angel_feed.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 75cd5a9..3b0b734 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
+ import requests
+ 
+ from app.config import settings
++from app.cache import ttl_cache
+ 
+ logger = logging.getLogger("angel_feed")
+ 
+@@ -281,6 +282,7 @@ def _call_candle_data_with_retry(api, params: dict, symbol: str) -> dict:
+     )
+ 
+ 
++@ttl_cache(ttl_seconds=900)
+ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+     """Daily OHLC candles via Angel One's getCandleData - same output shape
+     ({time, open, high, low, close}, Lightweight-Charts-ready) as
+-- 
+2.43.0
+
