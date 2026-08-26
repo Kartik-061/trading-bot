@@ -204,6 +204,65 @@ def _fetch_ltp(symbol: str) -> dict:
     }
 
 
+_PERIOD_TO_DAYS = {
+    "5d": 5, "1mo": 30, "3mo": 90, "6mo": 180, "60d": 60, "90d": 90,
+    "1y": 365, "2y": 730, "5y": 1825,
+    "max": 3650,  # Angel has no true "max" like yfinance - 10y is a practical stand-in
+}
+
+
+def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+    """Daily OHLC candles via Angel One's getCandleData - same output shape
+    ({time, open, high, low, close}, Lightweight-Charts-ready) as
+    historical_data.fetch_ohlc_for_chart, so it's a drop-in for the
+    /discover/stock-chart endpoint.
+
+    NOT live-tested against Angel's real servers (no network access to
+    angelone.in from this sandbox) - verify a couple of periods actually
+    render correctly before relying on this."""
+    days = _PERIOD_TO_DAYS.get(period, 365)
+    tradingsymbol, token = _get_token(symbol)
+    todate = datetime.utcnow()
+    fromdate = todate - timedelta(days=days)
+    params = {
+        "exchange": "NSE",
+        "symboltoken": token,
+        "interval": "ONE_DAY",
+        "fromdate": fromdate.strftime("%Y-%m-%d %H:%M"),
+        "todate": todate.strftime("%Y-%m-%d %H:%M"),
+    }
+
+    api = _get_session()
+    resp = api.getCandleData(params)
+    if not _is_success(resp) and _is_auth_error(resp):
+        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
+        _reset_session()
+        api = _get_session()
+        resp = api.getCandleData(params)
+
+    if not _is_success(resp):
+        raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
+
+    rows = resp.get("data") or []
+    if not rows:
+        raise ValueError(f"No historical data for {symbol} at period={period} (Angel returned an empty candle set)")
+
+    candles = []
+    for row in rows:
+        ts_str, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
+        # Angel's timestamps come back as ISO 8601 with an offset, e.g.
+        # "2021-02-10T09:15:00+05:30" - fromisoformat handles that natively.
+        ts = datetime.fromisoformat(ts_str)
+        candles.append({
+            "time": int(ts.timestamp()),
+            "open": round(float(o), 2),
+            "high": round(float(h), 2),
+            "low": round(float(l), 2),
+            "close": round(float(c), 2),
+        })
+    return candles
+
+
 def get_angel_ltp(symbol: str) -> dict:
     """Same return shape as price_feed.get_live_price(), same 60s cache
     behavior, so it's a drop-in swap wherever get_live_price() is called."""

@@ -1,0 +1,176 @@
+From 54e7f9443e3f7d674970826ece6d4b08138f0535 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 04:27:06 +0000
+Subject: [PATCH] Migrate stock-chart and live-price endpoints to Angel One
+ (PRICE_FEED=angel)
+
+Extends the PRICE_FEED switch beyond just the live bot's tick loop to
+the Research/Discover pages, which were still hitting yfinance and
+getting rate-limited (YFRateLimitError seen in production logs today).
+
+New: app/services/angel_feed.py::get_angel_ohlc(symbol, period) - daily
+OHLC via Angel's getCandleData, same output shape ({time, open, high,
+low, close}) as historical_data.fetch_ohlc_for_chart so it's a drop-in.
+Maps period strings ("5d".."5y","max") to a fromdate/todate range;
+"max" is capped at 10 years as a practical stand-in since Angel has no
+true "max" like yfinance. Reuses the same auth-error-detection and
+one-retry-with-fresh-login logic already built for get_angel_ltp.
+
+Wired into routes.py: /discover/stock-chart/{symbol},
+/prices/{symbol}/live, and /prices/live now check settings.PRICE_FEED
+and call the Angel functions when set to "angel", otherwise unchanged
+yfinance behavior (default stays "yahoo").
+
+NOT migrated, and documented clearly why: /discover/stock-info/{symbol}
+(company fundamentals - sector, market cap, P/E, 52-week high/low).
+Angel One's SmartAPI is a trading + market-data API with no
+fundamentals/research endpoint at all - there's nothing on Angel's
+side to move this to. That one endpoint keeps its yfinance
+rate-limit exposure regardless of PRICE_FEED.
+
+Verified: get_angel_ohlc's candle-parsing tested against a realistic
+mocked getCandleData response (Angel's documented format: list of
+[iso_timestamp, open, high, low, close, volume] rows) - correctly
+produces the expected {time, open, high, low, close} shape. All 17
+existing tests still pass. NOT live-tested against Angel's real
+getCandleData endpoint - verify a couple of chart periods actually
+render on the Research page before relying on this fully.
+---
+ app/api/routes.py          | 29 ++++++++++++++++---
+ app/services/angel_feed.py | 59 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 84 insertions(+), 4 deletions(-)
+
+diff --git a/app/api/routes.py b/app/api/routes.py
+index 9b59ff7..085ef4d 100644
+--- a/app/api/routes.py
++++ b/app/api/routes.py
+@@ -326,9 +326,14 @@ def stock_chart(request: Request, symbol: str,
+     Full OHLC candles for one stock, for the long-term screener's
+     click-to-view-detail chart.
+     """
++    from app.config import settings
+     try:
+-        candles = fetch_ohlc_for_chart(symbol, period=period)
+-    except ValueError as e:
++        if settings.PRICE_FEED == "angel":
++            from app.services.angel_feed import get_angel_ohlc
++            candles = get_angel_ohlc(symbol, period=period)
++        else:
++            candles = fetch_ohlc_for_chart(symbol, period=period)
++    except (ValueError, RuntimeError) as e:
+         return {"status": False, "reason": str(e)}
+ 
+     return {"symbol": symbol.upper(), "period": period, "candles": candles}
+@@ -337,21 +342,37 @@ from app.services.price_feed import get_live_price, get_live_prices_bulk
+ 
+ @router.get("/prices/{symbol}/live")
+ def live_price(symbol: str):
+-    """Real (delayed ~15-20min) price from Yahoo Finance. No credentials needed."""
++    """Real price - Yahoo Finance (~15-20min delayed) by default, or Angel
++    One (near-real-time) when PRICE_FEED=angel."""
++    from app.config import settings
++    if settings.PRICE_FEED == "angel":
++        from app.services.angel_feed import get_angel_ltp
++        return get_angel_ltp(symbol.upper())
+     return get_live_price(symbol.upper())
+ 
+ 
+ @router.get("/prices/live")
+ def live_prices_bulk(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK"):
+     """Same as above but for multiple symbols, comma-separated."""
++    from app.config import settings
+     symbol_list = [s.strip().upper() for s in symbols.split(",")]
++    if settings.PRICE_FEED == "angel":
++        from app.services.angel_feed import get_angel_ltp
++        return {s: get_angel_ltp(s) for s in symbol_list}
+     return get_live_prices_bulk(symbol_list)
+ 
+ @router.get("/discover/stock-info/{symbol}")
+ @limiter.limit("15/minute")
+ def stock_info(request: Request, symbol: str):
+     """Basic fundamentals for stock research - separate from fast_info-based
+-    live prices since .info is heavier; rate-limited accordingly."""
++    live prices since .info is heavier; rate-limited accordingly.
++
++    NOTE: always uses Yahoo Finance, regardless of PRICE_FEED. Angel One's
++    SmartAPI has no fundamentals/company-info endpoint at all (no sector,
++    market cap, P/E, 52-week high/low) - it's a trading + market-data API,
++    not a research API. There's nothing on the Angel side to migrate this
++    to, so this one endpoint keeps the yfinance rate-limit exposure that
++    PRICE_FEED=angel removes everywhere else."""
+     import yfinance as yf
+     try:
+         ticker = yf.Ticker(f"{symbol.upper()}.NS")
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 1336c38..49d163a 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -204,6 +204,65 @@ def _fetch_ltp(symbol: str) -> dict:
+     }
+ 
+ 
++_PERIOD_TO_DAYS = {
++    "5d": 5, "1mo": 30, "3mo": 90, "6mo": 180, "60d": 60, "90d": 90,
++    "1y": 365, "2y": 730, "5y": 1825,
++    "max": 3650,  # Angel has no true "max" like yfinance - 10y is a practical stand-in
++}
++
++
++def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
++    """Daily OHLC candles via Angel One's getCandleData - same output shape
++    ({time, open, high, low, close}, Lightweight-Charts-ready) as
++    historical_data.fetch_ohlc_for_chart, so it's a drop-in for the
++    /discover/stock-chart endpoint.
++
++    NOT live-tested against Angel's real servers (no network access to
++    angelone.in from this sandbox) - verify a couple of periods actually
++    render correctly before relying on this."""
++    days = _PERIOD_TO_DAYS.get(period, 365)
++    tradingsymbol, token = _get_token(symbol)
++    todate = datetime.utcnow()
++    fromdate = todate - timedelta(days=days)
++    params = {
++        "exchange": "NSE",
++        "symboltoken": token,
++        "interval": "ONE_DAY",
++        "fromdate": fromdate.strftime("%Y-%m-%d %H:%M"),
++        "todate": todate.strftime("%Y-%m-%d %H:%M"),
++    }
++
++    api = _get_session()
++    resp = api.getCandleData(params)
++    if not _is_success(resp) and _is_auth_error(resp):
++        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
++        _reset_session()
++        api = _get_session()
++        resp = api.getCandleData(params)
++
++    if not _is_success(resp):
++        raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
++
++    rows = resp.get("data") or []
++    if not rows:
++        raise ValueError(f"No historical data for {symbol} at period={period} (Angel returned an empty candle set)")
++
++    candles = []
++    for row in rows:
++        ts_str, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
++        # Angel's timestamps come back as ISO 8601 with an offset, e.g.
++        # "2021-02-10T09:15:00+05:30" - fromisoformat handles that natively.
++        ts = datetime.fromisoformat(ts_str)
++        candles.append({
++            "time": int(ts.timestamp()),
++            "open": round(float(o), 2),
++            "high": round(float(h), 2),
++            "low": round(float(l), 2),
++            "close": round(float(c), 2),
++        })
++    return candles
++
++
+ def get_angel_ltp(symbol: str) -> dict:
+     """Same return shape as price_feed.get_live_price(), same 60s cache
+     behavior, so it's a drop-in swap wherever get_live_price() is called."""
+-- 
+2.43.0
+

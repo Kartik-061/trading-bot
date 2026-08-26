@@ -326,9 +326,14 @@ def stock_chart(request: Request, symbol: str,
     Full OHLC candles for one stock, for the long-term screener's
     click-to-view-detail chart.
     """
+    from app.config import settings
     try:
-        candles = fetch_ohlc_for_chart(symbol, period=period)
-    except ValueError as e:
+        if settings.PRICE_FEED == "angel":
+            from app.services.angel_feed import get_angel_ohlc
+            candles = get_angel_ohlc(symbol, period=period)
+        else:
+            candles = fetch_ohlc_for_chart(symbol, period=period)
+    except (ValueError, RuntimeError) as e:
         return {"status": False, "reason": str(e)}
 
     return {"symbol": symbol.upper(), "period": period, "candles": candles}
@@ -337,21 +342,37 @@ from app.services.price_feed import get_live_price, get_live_prices_bulk
 
 @router.get("/prices/{symbol}/live")
 def live_price(symbol: str):
-    """Real (delayed ~15-20min) price from Yahoo Finance. No credentials needed."""
+    """Real price - Yahoo Finance (~15-20min delayed) by default, or Angel
+    One (near-real-time) when PRICE_FEED=angel."""
+    from app.config import settings
+    if settings.PRICE_FEED == "angel":
+        from app.services.angel_feed import get_angel_ltp
+        return get_angel_ltp(symbol.upper())
     return get_live_price(symbol.upper())
 
 
 @router.get("/prices/live")
 def live_prices_bulk(symbols: str = "SBIFUNDS,RELIANCE,TCS,INFY,HDFCBANK"):
     """Same as above but for multiple symbols, comma-separated."""
+    from app.config import settings
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    if settings.PRICE_FEED == "angel":
+        from app.services.angel_feed import get_angel_ltp
+        return {s: get_angel_ltp(s) for s in symbol_list}
     return get_live_prices_bulk(symbol_list)
 
 @router.get("/discover/stock-info/{symbol}")
 @limiter.limit("15/minute")
 def stock_info(request: Request, symbol: str):
     """Basic fundamentals for stock research - separate from fast_info-based
-    live prices since .info is heavier; rate-limited accordingly."""
+    live prices since .info is heavier; rate-limited accordingly.
+
+    NOTE: always uses Yahoo Finance, regardless of PRICE_FEED. Angel One's
+    SmartAPI has no fundamentals/company-info endpoint at all (no sector,
+    market cap, P/E, 52-week high/low) - it's a trading + market-data API,
+    not a research API. There's nothing on the Angel side to migrate this
+    to, so this one endpoint keeps the yfinance rate-limit exposure that
+    PRICE_FEED=angel removes everywhere else."""
     import yfinance as yf
     try:
         ticker = yf.Ticker(f"{symbol.upper()}.NS")
