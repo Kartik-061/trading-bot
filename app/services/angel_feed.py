@@ -105,6 +105,43 @@ def _get_token(symbol: str) -> tuple:
     return entry
 
 
+_nifty_token = None
+_nifty_lookup_attempted = False
+
+
+def get_nifty_token():
+    """Best-effort lookup of the Nifty 50 index's token, for relative-
+    strength comparisons in the long-term screener. Index rows in Angel's
+    instrument master don't have the "-EQ" suffix _build_symbol_token_map()
+    filters for, so this searches separately. NOT live-verified against
+    Angel's real instrument master (no network access to angelone.in from
+    this sandbox) - matches by name text rather than a specific
+    instrumenttype code, since that exact value couldn't be confirmed
+    here. Returns None (not an exception) if no confident match is found,
+    so a broken lookup degrades to "skip relative strength" rather than
+    crashing the scan - same contract fetch_index_baseline() already has
+    for yfinance."""
+    global _nifty_token, _nifty_lookup_attempted
+    if _nifty_lookup_attempted:
+        return _nifty_token
+    _nifty_lookup_attempted = True
+    try:
+        instruments = _load_instrument_master()
+        for row in instruments:
+            if row.get("exch_seg") != "NSE":
+                continue
+            name = str(row.get("name", "")).upper()
+            symbol_field = str(row.get("symbol", "")).upper()
+            if name in ("NIFTY", "NIFTY 50") or symbol_field in ("NIFTY", "NIFTY50", "NIFTY 50"):
+                _nifty_token = row.get("token")
+                logger.info(f"Angel Nifty 50 index token found: {_nifty_token}")
+                return _nifty_token
+        logger.warning("Could not find a confident Nifty 50 index match in Angel's instrument master - relative strength will be skipped.")
+    except Exception as e:
+        logger.warning(f"Nifty 50 index token lookup failed (non-fatal, relative strength will be skipped): {e}")
+    return None
+
+
 def _get_session():
     """Logs in once per process, reused across calls. Angel One sessions
     expire (forced logout at midnight per their docs) - if a call fails
@@ -253,8 +290,15 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
     NOT live-tested against Angel's real servers (no network access to
     angelone.in from this sandbox) - verify a couple of periods actually
     render correctly before relying on this."""
-    days = _PERIOD_TO_DAYS.get(period, 365)
     tradingsymbol, token = _get_token(symbol)
+    return _get_ohlc_by_token(token, period=period, label=symbol)
+
+
+def _get_ohlc_by_token(token: str, period: str = "1y", label: str = "") -> list:
+    """Same as get_angel_ohlc but takes a raw Angel symboltoken directly,
+    for instruments (like the Nifty 50 index) that aren't in the
+    equity-only symbol map _get_token() looks up."""
+    days = _PERIOD_TO_DAYS.get(period, 365)
     todate = datetime.utcnow()
     fromdate = todate - timedelta(days=days)
     params = {
@@ -266,20 +310,20 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
     }
 
     api = _get_session()
-    resp = _call_candle_data_with_retry(api, params, symbol)
+    resp = _call_candle_data_with_retry(api, params, label or token)
 
     if not _is_success(resp) and _is_auth_error(resp):
-        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
+        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {label or token}, re-logging in and retrying once.")
         _reset_session()
         api = _get_session()
-        resp = _call_candle_data_with_retry(api, params, symbol)
+        resp = _call_candle_data_with_retry(api, params, label or token)
 
     if not _is_success(resp):
-        raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
+        raise RuntimeError(f"Angel getCandleData failed for {label or token}: {resp}")
 
     rows = resp.get("data") or []
     if not rows:
-        raise ValueError(f"No historical data for {symbol} at period={period} (Angel returned an empty candle set)")
+        raise ValueError(f"No historical data for {label or token} at period={period} (Angel returned an empty candle set)")
 
     candles = []
     for row in rows:

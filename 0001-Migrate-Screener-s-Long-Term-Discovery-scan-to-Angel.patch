@@ -1,0 +1,274 @@
+From e5142c5c48416ea8b20d217acbe71d2c6449511b Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Wed, 26 Aug 2026 10:05:31 +0000
+Subject: [PATCH] Migrate Screener's Long-Term Discovery scan to Angel One
+ (PRICE_FEED=angel)
+
+Today's logs showed the Screener page's "Long-Term Discovery Ranking"
+panel (scan_long_term -> fetch_multi_period) hitting repeated yfinance
+401 "Invalid Crumb" errors - a different code path from the
+stock-chart/live-price endpoints already migrated, since this
+screener does its own independent yfinance fetching.
+
+Added to app/services/angel_feed.py:
+- get_nifty_token(): best-effort lookup of the Nifty 50 index's Angel
+  token for relative-strength comparisons. Index instruments don't
+  have the "-EQ" suffix the main equity symbol map filters for, so
+  this searches separately by name text. Returns None (not an
+  exception) on no confident match, matching the existing "skip
+  relative strength, don't crash the scan" contract.
+- _get_ohlc_by_token(): get_angel_ohlc's core logic extracted to accept
+  a raw token directly, so the Nifty lookup (which has a token but no
+  bare-symbol map entry) can reuse the exact same fetch/retry/parse
+  path instead of duplicating it.
+
+Added to app/screener/long_term.py:
+- fetch_multi_period_angel(): same trailing-return and annualized-
+  volatility computation as fetch_multi_period, sourced from
+  get_angel_ohlc's candle list instead of a yfinance DataFrame.
+  pe_ratio and sector are always None - Angel's SmartAPI has no
+  fundamentals endpoint at all (same documented limitation as
+  /discover/stock-info), nothing to fetch them from.
+- fetch_index_baseline_angel(): Angel version of the Nifty baseline
+  fetch, same graceful None-on-failure behavior.
+- scan_long_term() now picks the yfinance or Angel fetch function
+  based on settings.PRICE_FEED, same switch pattern used everywhere
+  else in this migration.
+
+Verified with mocked data: fetch_multi_period_angel correctly computes
+3mo/6mo/1y returns and volatility from a synthetic 500-day candle
+series (2y correctly comes back None - not enough days for a 2-year
+window, rather than a wrong number), with pe_ratio/sector correctly
+None. get_nifty_token found and cached a mocked Nifty instrument
+correctly, and didn't re-search on a second call. Graceful-failure
+path (no Nifty match found) verified to return None rather than raise.
+All 17 existing tests still pass.
+
+NOT live-tested against Angel's real instrument master or
+getCandleData for this specific use case - the Nifty token match in
+particular is a best-effort text search since Angel's exact field
+values for index rows couldn't be confirmed without live access.
+Watch the first real scan_long_term run with PRICE_FEED=angel for the
+"Angel Nifty 50 index token found" or the "could not find a confident
+match" warning log to see which path it actually took.
+---
+ app/screener/long_term.py  | 95 ++++++++++++++++++++++++++++++++++++--
+ app/services/angel_feed.py | 56 +++++++++++++++++++---
+ 2 files changed, 142 insertions(+), 9 deletions(-)
+
+diff --git a/app/screener/long_term.py b/app/screener/long_term.py
+index e24c35d..17c8fb8 100644
+--- a/app/screener/long_term.py
++++ b/app/screener/long_term.py
+@@ -14,11 +14,13 @@ a naive count-based cutoff often reports "not enough history" for stocks
+ that clearly do have 2 years of data. Comparing real dates avoids that.
+ """
+ import math
+-from datetime import timedelta
++from datetime import datetime, timedelta, timezone
+ 
+ import yfinance as yf
+ from concurrent.futures import ThreadPoolExecutor, as_completed
+ 
++from app.config import settings
++
+ from app.cache import ttl_cache
+ 
+ 
+@@ -135,13 +137,100 @@ def fetch_index_baseline() -> dict:
+     return result["returns_pct"] if result else None
+ 
+ 
++@ttl_cache(ttl_seconds=900)
++def fetch_multi_period_angel(symbol: str) -> dict:
++    """
++    Angel One version of fetch_multi_period() - same trailing-return and
++    volatility computation, sourced from get_angel_ohlc() instead of
++    yfinance. pe_ratio and sector are always None here: Angel's SmartAPI
++    has no fundamentals endpoint at all (same limitation documented on
++    /discover/stock-info), so there's nothing to fetch them from.
++
++    NOT live-tested against Angel's real servers - verify a batch scan
++    actually returns results before relying on this.
++    """
++    from app.services.angel_feed import get_angel_ohlc
++
++    bare_symbol = symbol.replace(".NS", "")
++    try:
++        candles = get_angel_ohlc(bare_symbol, period="2y")
++    except Exception:
++        return None
++
++    if not candles or len(candles) < 30:
++        return None
++
++    current_price = candles[-1]["close"]
++    latest_date = datetime.fromtimestamp(candles[-1]["time"], tz=timezone.utc)
++
++    returns = {}
++    for label, cal_days in PERIOD_WINDOWS_TRADING_DAYS.items():
++        cutoff = latest_date - timedelta(days=cal_days)
++        past_candles = [c for c in candles if datetime.fromtimestamp(c["time"], tz=timezone.utc) <= cutoff]
++        if not past_candles:
++            returns[label] = None
++        else:
++            past_price = past_candles[-1]["close"]
++            returns[label] = round((current_price - past_price) / past_price * 100, 2) if past_price else None
++
++    closes = [c["close"] for c in candles]
++    daily_returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1]]
++    volatility_pct = None
++    if len(daily_returns) >= 10:
++        mean = sum(daily_returns) / len(daily_returns)
++        variance = sum((r - mean) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
++        volatility_pct = round((variance ** 0.5) * (252 ** 0.5) * 100, 2)
++
++    return {
++        "symbol": bare_symbol,
++        "last_price": round(current_price, 2),
++        "returns_pct": returns,
++        "pe_ratio": None,  # Angel has no fundamentals endpoint
++        "sector": None,    # Angel has no fundamentals endpoint
++        "volatility_pct": volatility_pct,
++        "data_points": len(candles),
++    }
++
++
++def fetch_index_baseline_angel() -> dict:
++    """Angel One version of fetch_index_baseline(). Returns None (skipping
++    relative strength, not crashing the scan) if the Nifty token can't be
++    confidently found - see get_nifty_token()'s docstring for why that
++    lookup isn't guaranteed."""
++    from app.services.angel_feed import get_nifty_token, _get_ohlc_by_token
++
++    token = get_nifty_token()
++    if not token:
++        return None
++    try:
++        candles = _get_ohlc_by_token(token, period="2y", label="NIFTY50")
++    except Exception:
++        return None
++    if not candles or len(candles) < 30:
++        return None
++
++    current_price = candles[-1]["close"]
++    latest_date = datetime.fromtimestamp(candles[-1]["time"], tz=timezone.utc)
++    returns = {}
++    for label, cal_days in PERIOD_WINDOWS_TRADING_DAYS.items():
++        cutoff = latest_date - timedelta(days=cal_days)
++        past_candles = [c for c in candles if datetime.fromtimestamp(c["time"], tz=timezone.utc) <= cutoff]
++        returns[label] = None
++        if past_candles and past_candles[-1]["close"]:
++            past_price = past_candles[-1]["close"]
++            returns[label] = round((current_price - past_price) / past_price * 100, 2)
++    return returns
++
++
+ def scan_long_term(symbols: list = None, rank_by: str = "1y") -> list:
+     symbols = symbols or EXTENDED_UNIVERSE
+-    index_returns = fetch_index_baseline()
++    use_angel = settings.PRICE_FEED == "angel"
++    fetch_fn = fetch_multi_period_angel if use_angel else fetch_multi_period
++    index_returns = fetch_index_baseline_angel() if use_angel else fetch_index_baseline()
+     results = []
+ 
+     with ThreadPoolExecutor(max_workers=8) as executor:
+-        futures = {executor.submit(fetch_multi_period, sym): sym for sym in symbols}
++        futures = {executor.submit(fetch_fn, sym): sym for sym in symbols}
+         # No overall timeout here on purpose: the `with` block's own
+         # executor.shutdown(wait=True) already blocks until every submitted
+         # future finishes, no matter what. A shorter timeout on as_completed()
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 507f81b..75cd5a9 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -105,6 +105,43 @@ def _get_token(symbol: str) -> tuple:
+     return entry
+ 
+ 
++_nifty_token = None
++_nifty_lookup_attempted = False
++
++
++def get_nifty_token():
++    """Best-effort lookup of the Nifty 50 index's token, for relative-
++    strength comparisons in the long-term screener. Index rows in Angel's
++    instrument master don't have the "-EQ" suffix _build_symbol_token_map()
++    filters for, so this searches separately. NOT live-verified against
++    Angel's real instrument master (no network access to angelone.in from
++    this sandbox) - matches by name text rather than a specific
++    instrumenttype code, since that exact value couldn't be confirmed
++    here. Returns None (not an exception) if no confident match is found,
++    so a broken lookup degrades to "skip relative strength" rather than
++    crashing the scan - same contract fetch_index_baseline() already has
++    for yfinance."""
++    global _nifty_token, _nifty_lookup_attempted
++    if _nifty_lookup_attempted:
++        return _nifty_token
++    _nifty_lookup_attempted = True
++    try:
++        instruments = _load_instrument_master()
++        for row in instruments:
++            if row.get("exch_seg") != "NSE":
++                continue
++            name = str(row.get("name", "")).upper()
++            symbol_field = str(row.get("symbol", "")).upper()
++            if name in ("NIFTY", "NIFTY 50") or symbol_field in ("NIFTY", "NIFTY50", "NIFTY 50"):
++                _nifty_token = row.get("token")
++                logger.info(f"Angel Nifty 50 index token found: {_nifty_token}")
++                return _nifty_token
++        logger.warning("Could not find a confident Nifty 50 index match in Angel's instrument master - relative strength will be skipped.")
++    except Exception as e:
++        logger.warning(f"Nifty 50 index token lookup failed (non-fatal, relative strength will be skipped): {e}")
++    return None
++
++
+ def _get_session():
+     """Logs in once per process, reused across calls. Angel One sessions
+     expire (forced logout at midnight per their docs) - if a call fails
+@@ -253,8 +290,15 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+     NOT live-tested against Angel's real servers (no network access to
+     angelone.in from this sandbox) - verify a couple of periods actually
+     render correctly before relying on this."""
+-    days = _PERIOD_TO_DAYS.get(period, 365)
+     tradingsymbol, token = _get_token(symbol)
++    return _get_ohlc_by_token(token, period=period, label=symbol)
++
++
++def _get_ohlc_by_token(token: str, period: str = "1y", label: str = "") -> list:
++    """Same as get_angel_ohlc but takes a raw Angel symboltoken directly,
++    for instruments (like the Nifty 50 index) that aren't in the
++    equity-only symbol map _get_token() looks up."""
++    days = _PERIOD_TO_DAYS.get(period, 365)
+     todate = datetime.utcnow()
+     fromdate = todate - timedelta(days=days)
+     params = {
+@@ -266,20 +310,20 @@ def get_angel_ohlc(symbol: str, period: str = "1y") -> list:
+     }
+ 
+     api = _get_session()
+-    resp = _call_candle_data_with_retry(api, params, symbol)
++    resp = _call_candle_data_with_retry(api, params, label or token)
+ 
+     if not _is_success(resp) and _is_auth_error(resp):
+-        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {symbol}, re-logging in and retrying once.")
++        logger.warning(f"Angel session looks invalid/expired fetching OHLC for {label or token}, re-logging in and retrying once.")
+         _reset_session()
+         api = _get_session()
+-        resp = _call_candle_data_with_retry(api, params, symbol)
++        resp = _call_candle_data_with_retry(api, params, label or token)
+ 
+     if not _is_success(resp):
+-        raise RuntimeError(f"Angel getCandleData failed for {symbol}: {resp}")
++        raise RuntimeError(f"Angel getCandleData failed for {label or token}: {resp}")
+ 
+     rows = resp.get("data") or []
+     if not rows:
+-        raise ValueError(f"No historical data for {symbol} at period={period} (Angel returned an empty candle set)")
++        raise ValueError(f"No historical data for {label or token} at period={period} (Angel returned an empty candle set)")
+ 
+     candles = []
+     for row in rows:
+-- 
+2.43.0
+

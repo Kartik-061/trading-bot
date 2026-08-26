@@ -14,10 +14,12 @@ a naive count-based cutoff often reports "not enough history" for stocks
 that clearly do have 2 years of data. Comparing real dates avoids that.
 """
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from app.config import settings
 
 from app.cache import ttl_cache
 
@@ -135,13 +137,100 @@ def fetch_index_baseline() -> dict:
     return result["returns_pct"] if result else None
 
 
+@ttl_cache(ttl_seconds=900)
+def fetch_multi_period_angel(symbol: str) -> dict:
+    """
+    Angel One version of fetch_multi_period() - same trailing-return and
+    volatility computation, sourced from get_angel_ohlc() instead of
+    yfinance. pe_ratio and sector are always None here: Angel's SmartAPI
+    has no fundamentals endpoint at all (same limitation documented on
+    /discover/stock-info), so there's nothing to fetch them from.
+
+    NOT live-tested against Angel's real servers - verify a batch scan
+    actually returns results before relying on this.
+    """
+    from app.services.angel_feed import get_angel_ohlc
+
+    bare_symbol = symbol.replace(".NS", "")
+    try:
+        candles = get_angel_ohlc(bare_symbol, period="2y")
+    except Exception:
+        return None
+
+    if not candles or len(candles) < 30:
+        return None
+
+    current_price = candles[-1]["close"]
+    latest_date = datetime.fromtimestamp(candles[-1]["time"], tz=timezone.utc)
+
+    returns = {}
+    for label, cal_days in PERIOD_WINDOWS_TRADING_DAYS.items():
+        cutoff = latest_date - timedelta(days=cal_days)
+        past_candles = [c for c in candles if datetime.fromtimestamp(c["time"], tz=timezone.utc) <= cutoff]
+        if not past_candles:
+            returns[label] = None
+        else:
+            past_price = past_candles[-1]["close"]
+            returns[label] = round((current_price - past_price) / past_price * 100, 2) if past_price else None
+
+    closes = [c["close"] for c in candles]
+    daily_returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1]]
+    volatility_pct = None
+    if len(daily_returns) >= 10:
+        mean = sum(daily_returns) / len(daily_returns)
+        variance = sum((r - mean) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
+        volatility_pct = round((variance ** 0.5) * (252 ** 0.5) * 100, 2)
+
+    return {
+        "symbol": bare_symbol,
+        "last_price": round(current_price, 2),
+        "returns_pct": returns,
+        "pe_ratio": None,  # Angel has no fundamentals endpoint
+        "sector": None,    # Angel has no fundamentals endpoint
+        "volatility_pct": volatility_pct,
+        "data_points": len(candles),
+    }
+
+
+def fetch_index_baseline_angel() -> dict:
+    """Angel One version of fetch_index_baseline(). Returns None (skipping
+    relative strength, not crashing the scan) if the Nifty token can't be
+    confidently found - see get_nifty_token()'s docstring for why that
+    lookup isn't guaranteed."""
+    from app.services.angel_feed import get_nifty_token, _get_ohlc_by_token
+
+    token = get_nifty_token()
+    if not token:
+        return None
+    try:
+        candles = _get_ohlc_by_token(token, period="2y", label="NIFTY50")
+    except Exception:
+        return None
+    if not candles or len(candles) < 30:
+        return None
+
+    current_price = candles[-1]["close"]
+    latest_date = datetime.fromtimestamp(candles[-1]["time"], tz=timezone.utc)
+    returns = {}
+    for label, cal_days in PERIOD_WINDOWS_TRADING_DAYS.items():
+        cutoff = latest_date - timedelta(days=cal_days)
+        past_candles = [c for c in candles if datetime.fromtimestamp(c["time"], tz=timezone.utc) <= cutoff]
+        returns[label] = None
+        if past_candles and past_candles[-1]["close"]:
+            past_price = past_candles[-1]["close"]
+            returns[label] = round((current_price - past_price) / past_price * 100, 2)
+    return returns
+
+
 def scan_long_term(symbols: list = None, rank_by: str = "1y") -> list:
     symbols = symbols or EXTENDED_UNIVERSE
-    index_returns = fetch_index_baseline()
+    use_angel = settings.PRICE_FEED == "angel"
+    fetch_fn = fetch_multi_period_angel if use_angel else fetch_multi_period
+    index_returns = fetch_index_baseline_angel() if use_angel else fetch_index_baseline()
     results = []
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(fetch_multi_period, sym): sym for sym in symbols}
+        futures = {executor.submit(fetch_fn, sym): sym for sym in symbols}
         # No overall timeout here on purpose: the `with` block's own
         # executor.shutdown(wait=True) already blocks until every submitted
         # future finishes, no matter what. A shorter timeout on as_completed()
