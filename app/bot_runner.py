@@ -32,6 +32,34 @@ NSE_HOLIDAYS_2026 = {
 }
 
 
+DECISION_WINDOW_START = dtime(15, 20)  # last ~10 minutes of the trading day
+
+
+def is_decision_time(now_ist: datetime = None) -> bool:
+    """
+    The validated backtest (STRATEGY_EVALUATION.md, p=0.0008) computed RSI
+    on 5 years of DAILY closes - RSI(14) there means 14 TRADING DAYS. But
+    the live tick loop used to call strategy.decide() on every tick (as
+    often as every 60 seconds), and MeanReversionStrategy.decide() appends
+    every price it's given to its own rolling window - so RSI(14) live was
+    actually being computed over the last 14 MINUTES, not 14 days. Same
+    formula, completely different (and never statistically tested)
+    timeframe - which is exactly why trades were round-tripping every few
+    minutes instead of the ~5-trades-per-stock-per-year pace the backtest
+    actually validated.
+
+    Restricting actual decisions to a short window near market close means
+    each symbol's strategy only ever sees one new price per trading day -
+    genuinely matching the daily-close granularity that was validated,
+    instead of a different, untested minute-scale strategy wearing the
+    same name.
+    """
+    now_ist = now_ist or datetime.now(IST)
+    if not is_market_open(now_ist):
+        return False
+    return DECISION_WINDOW_START <= now_ist.time() <= MARKET_CLOSE
+
+
 def is_market_open(now_ist: datetime = None) -> bool:
     """
     True only during real NSE trading hours: 9:15-15:30 IST, Monday-Friday,
@@ -98,6 +126,7 @@ class BotRunner:
         self.strategy_name = "ema_rsi"
         self.tick_seconds = 2
         self.last_signal = {}
+        self.last_decision_date = {}  # symbol -> "YYYY-MM-DD" of the last day the strategy actually made a BUY/SELL/HOLD decision
 
     def _latest_prices(self) -> dict:
         """Build the symbol->price map used for portfolio valuation. When
@@ -166,6 +195,7 @@ class BotRunner:
         self.strategies = {sym: strategy_cls() for sym in symbols}
         self.tick_seconds = tick_seconds
         self.last_signal = {sym: "HOLD" for sym in symbols}
+        self.last_decision_date = {}
         self.starting_capital = inception_starting_capital
         self.running = True
 
@@ -186,6 +216,8 @@ class BotRunner:
                     self.last_signal = {sym: "MARKET_CLOSED" for sym in self.symbols}
                     time.sleep(min(self.tick_seconds * 10, 30))
                     continue
+                now_ist = datetime.now(IST)
+                today_str = now_ist.strftime("%Y-%m-%d")
                 for symbol in self.symbols:
                     try:
                         price = self.feed.get_price(symbol)
@@ -193,9 +225,14 @@ class BotRunner:
                         logger.warning(f"Price fetch failed for {symbol} (user_id={self.user_id}): {e}")
                         continue  # skip this symbol this tick, don't kill the whole loop
                     db.add(PriceTick(timestamp=datetime.utcnow(), symbol=symbol, price=price))
+
+                    if not is_decision_time(now_ist) or self.last_decision_date.get(symbol) == today_str:
+                        continue  # not this symbol's one daily decision window yet, or already decided today
+
                     holding = self.broker.get_holding_qty(symbol)
                     signal = self.strategies[symbol].decide(price, holding)
                     self.last_signal[symbol] = signal
+                    self.last_decision_date[symbol] = today_str
                     if signal == "BUY":
                         # Size like engine.py does: capital_pct_per_trade of
                         # current cash, not a fixed share count. This is the
