@@ -143,19 +143,46 @@ class BotRunner:
         self.last_decision_date = {}  # symbol -> "YYYY-MM-DD" of the last day the strategy actually made a BUY/SELL/HOLD decision
 
     def _latest_prices(self) -> dict:
-        """Build the symbol->price map used for portfolio valuation. When
-        the live feed has no price yet for a symbol (most commonly: market
-        is closed, so the tick loop never called feed.get_price() this
-        session), falling back to 0 silently values any held position at
-        Rs.0 - that's not 'unknown price', it's a fabricated total loss on
-        that holding. Fall back to the position's own avg_price (what was
-        actually paid) instead, so a closed market shows the position at
-        its last known real value, not wiped out."""
+        """Build the symbol->price map used for portfolio valuation.
+        Fallback order when the live feed has no price for a symbol (most
+        commonly: market is closed, so the tick loop never called
+        feed.get_price() this session):
+        1. The most recent real PriceTick for that symbol - whatever price
+           was last actually observed while the market was open. This is
+           what keeps the closed-market portfolio value continuous with
+           the equity curve chart's last real snapshot, instead of
+           artificially jumping to a different number the moment the
+           market closes.
+        2. The position's own avg_price, only if there's truly no
+           PriceTick history at all for that symbol (should be rare).
+        3. 0, only if there's no position and no price history either -
+           genuinely unknown, not "unknown means Rs.0 of value.\""""
         prices = {}
+        live = self.feed.prices if self.feed else {}
+        held_symbols = set(self.broker.positions.keys()) if self.broker else set()
+        needs_fallback = [sym for sym in self.symbols if sym in held_symbols and not live.get(sym)]
+
+        last_known = {}
+        if needs_fallback:
+            db = SessionLocal()
+            try:
+                for sym in needs_fallback:
+                    tick = (
+                        db.query(PriceTick)
+                        .filter(PriceTick.symbol == sym)
+                        .order_by(PriceTick.timestamp.desc())
+                        .first()
+                    )
+                    if tick:
+                        last_known[sym] = tick.price
+            finally:
+                db.close()
+
         for sym in self.symbols:
-            live = self.feed.prices.get(sym) if self.feed else None
-            if live:
-                prices[sym] = live
+            if live.get(sym):
+                prices[sym] = live[sym]
+            elif sym in last_known:
+                prices[sym] = last_known[sym]
             else:
                 prices[sym] = self.broker.positions.get(sym, {}).get("avg_price", 0) if self.broker else 0
         return prices

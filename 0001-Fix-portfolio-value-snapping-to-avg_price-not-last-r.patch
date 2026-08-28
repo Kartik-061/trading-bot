@@ -1,0 +1,103 @@
+From a0205a6708855603707e99128a40e6d3136fba72 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Fri, 28 Aug 2026 06:54:07 +0000
+Subject: [PATCH] Fix portfolio value snapping to avg_price (not last real
+ price) when market closes
+
+Live evidence today: yesterday's equity curve chart correctly showed a
+real intraday dip to ~Rs.90,324 (genuine market movement). After
+market closed, the dashboard's Portfolio Value card jumped to
+~Rs.1,18,573 - not because anything actually recovered overnight, but
+because every open position's LTP had snapped to exactly its avg_price
+(confirmed: TCS, WIPRO, ULTRACEMCO, RELIANCE, BHARTIARTL all showed
+LTP == avg_price exactly in the Open Positions table). That's the
+earlier avg_price-fallback fix doing exactly what it was built to do -
+but avg_price (what was originally paid) is a different, disconnected
+number from "the last real price the market actually showed" (what
+the equity curve chart's last snapshot has). Falling back to avg_price
+made the card artificially discontinuous with the chart the instant
+the market closes - looking like a fake overnight recovery.
+
+Fix: _latest_prices() fallback order is now: (1) live feed price this
+session, (2) the most recent real PriceTick for that symbol - whatever
+price was last actually observed while the market was open, keeping
+the closed-market valuation continuous with the equity curve's last
+real point, (3) avg_price, only as a genuine last resort if there's no
+price history at all for that symbol. Only queries PriceTick for
+symbols actually held (not the whole watchlist), to keep this cheap.
+
+Verified end-to-end with an in-memory test DB: a position bought at
+avg_price 1295.40 whose most recent real PriceTick shows 1280.00
+(simulating today's actual gap) now correctly values at 1280.00, not
+1295.40 - matching the chart instead of jumping to cost basis. A
+position with genuinely zero price history still correctly falls back
+to avg_price as the last resort. All 17 existing tests still pass.
+---
+ app/bot_runner.py | 49 ++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 38 insertions(+), 11 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 559a1ca..f571a30 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -143,19 +143,46 @@ class BotRunner:
+         self.last_decision_date = {}  # symbol -> "YYYY-MM-DD" of the last day the strategy actually made a BUY/SELL/HOLD decision
+ 
+     def _latest_prices(self) -> dict:
+-        """Build the symbol->price map used for portfolio valuation. When
+-        the live feed has no price yet for a symbol (most commonly: market
+-        is closed, so the tick loop never called feed.get_price() this
+-        session), falling back to 0 silently values any held position at
+-        Rs.0 - that's not 'unknown price', it's a fabricated total loss on
+-        that holding. Fall back to the position's own avg_price (what was
+-        actually paid) instead, so a closed market shows the position at
+-        its last known real value, not wiped out."""
++        """Build the symbol->price map used for portfolio valuation.
++        Fallback order when the live feed has no price for a symbol (most
++        commonly: market is closed, so the tick loop never called
++        feed.get_price() this session):
++        1. The most recent real PriceTick for that symbol - whatever price
++           was last actually observed while the market was open. This is
++           what keeps the closed-market portfolio value continuous with
++           the equity curve chart's last real snapshot, instead of
++           artificially jumping to a different number the moment the
++           market closes.
++        2. The position's own avg_price, only if there's truly no
++           PriceTick history at all for that symbol (should be rare).
++        3. 0, only if there's no position and no price history either -
++           genuinely unknown, not "unknown means Rs.0 of value.\""""
+         prices = {}
++        live = self.feed.prices if self.feed else {}
++        held_symbols = set(self.broker.positions.keys()) if self.broker else set()
++        needs_fallback = [sym for sym in self.symbols if sym in held_symbols and not live.get(sym)]
++
++        last_known = {}
++        if needs_fallback:
++            db = SessionLocal()
++            try:
++                for sym in needs_fallback:
++                    tick = (
++                        db.query(PriceTick)
++                        .filter(PriceTick.symbol == sym)
++                        .order_by(PriceTick.timestamp.desc())
++                        .first()
++                    )
++                    if tick:
++                        last_known[sym] = tick.price
++            finally:
++                db.close()
++
+         for sym in self.symbols:
+-            live = self.feed.prices.get(sym) if self.feed else None
+-            if live:
+-                prices[sym] = live
++            if live.get(sym):
++                prices[sym] = live[sym]
++            elif sym in last_known:
++                prices[sym] = last_known[sym]
+             else:
+                 prices[sym] = self.broker.positions.get(sym, {}).get("avg_price", 0) if self.broker else 0
+         return prices
+-- 
+2.43.0
+
