@@ -1,0 +1,34 @@
+From cd24ea9011bd9126daca36131858844592001028 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Fri, 28 Aug 2026 07:04:08 +0000
+Subject: [PATCH] Fix TATAMOTORS symbol: renamed to TMPV after Oct 2025
+ demerger
+
+Angel One's live instrument master correctly couldn't find
+'TATAMOTORS-EQ' - Tata Motors demerged in October 2025 into Tata
+Motors Passenger Vehicles (new NSE symbol: TMPV) and a separately-
+listed commercial vehicles entity (TMCV). The old TATAMOTORS symbol
+no longer exists on NSE. yfinance's historical backtest data still
+worked fine since it reflects pre-rename history - only the LIVE
+Angel feed was affected, since it only lists currently-tradable
+symbols. Swapped to TMPV in the hardcoded default watchlist.
+---
+ src/routes/live-bot.tsx | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/routes/live-bot.tsx b/src/routes/live-bot.tsx
+index c15b024..93d9fde 100644
+--- a/src/routes/live-bot.tsx
++++ b/src/routes/live-bot.tsx
+@@ -43,7 +43,7 @@ function LiveBot() {
+   const screener = useQuery(screenerQuery());
+ 
+   const [strategy, setStrategy] = useState<string>("mean_reversion");
+-  const [symbols, setSymbols] = useState("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,SBIN,BHARTIARTL,ITC,LT,KOTAKBANK,AXISBANK,MARUTI,SUNPHARMA,TITAN,ASIANPAINT,BAJFINANCE,HCLTECH,WIPRO,ADANIENT,TATAMOTORS,ULTRACEMCO,NESTLEIND,POWERGRID,NTPC,ONGC,COALINDIA,BAJAJFINSV,HINDUNILVR,JSWSTEEL,TATASTEEL,GRASIM,CIPLA,DRREDDY,DIVISLAB,EICHERMOT,HEROMOTOCO,BAJAJ-AUTO,BPCL,INDUSINDBK,M&M,SBILIFE,HDFCLIFE,TECHM");
++  const [symbols, setSymbols] = useState("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,SBIN,BHARTIARTL,ITC,LT,KOTAKBANK,AXISBANK,MARUTI,SUNPHARMA,TITAN,ASIANPAINT,BAJFINANCE,HCLTECH,WIPRO,ADANIENT,TMPV,ULTRACEMCO,NESTLEIND,POWERGRID,NTPC,ONGC,COALINDIA,BAJAJFINSV,HINDUNILVR,JSWSTEEL,TATASTEEL,GRASIM,CIPLA,DRREDDY,DIVISLAB,EICHERMOT,HEROMOTOCO,BAJAJ-AUTO,BPCL,INDUSINDBK,M&M,SBILIFE,HDFCLIFE,TECHM");
+   const [interval, setInterval] = useState("60");
+   const [startingCapital, setStartingCapital] = useState("100000");
+   const capitalTouched = useRef(false);
+-- 
+2.43.0
+
