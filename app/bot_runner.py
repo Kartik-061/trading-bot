@@ -113,6 +113,20 @@ class AngelLiveFeed:
         self.prices[symbol] = price
         return price
 
+    def refresh_bulk(self, symbols: list):
+        """Fetch ALL symbols' LTP in one Angel API call (getMarketData -
+        up to 50 symbols/call) instead of one getLtpData call per symbol.
+        Angel rate-limits both endpoints at 1 request/second, but that's
+        1 request per SYMBOL for getLtpData vs 1 request for the WHOLE
+        BATCH here - the difference between a watchlist of 18-43 symbols
+        needing 18-43 requests a tick versus needing 1. Populates
+        self.prices directly; get_price() calls later this tick just read
+        the cache this also writes to, no extra requests."""
+        from app.services.angel_feed import get_angel_ltp_bulk
+        results = get_angel_ltp_bulk(symbols)
+        for sym, data in results.items():
+            self.prices[sym] = data["last_price"]
+
 class BotRunner:
     def __init__(self, user_id: int = None):
         self.user_id = user_id
@@ -218,6 +232,8 @@ class BotRunner:
                     continue
                 now_ist = datetime.now(IST)
                 today_str = now_ist.strftime("%Y-%m-%d")
+                if hasattr(self.feed, "refresh_bulk"):
+                    self.feed.refresh_bulk(self.symbols)
                 for symbol in self.symbols:
                     try:
                         price = self.feed.get_price(symbol)

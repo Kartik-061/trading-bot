@@ -1,0 +1,184 @@
+From ecafb9fba5fd0a1928b8f9963c40e4d6c60564fc Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Fri, 28 Aug 2026 02:07:29 +0000
+Subject: [PATCH] Add bulk LTP fetching for Angel One (1 API call per tick
+ instead of 1 per symbol)
+
+Asked directly: can the Angel data feed handle expanding the watchlist
+from 18 to 40+ symbols? Researched Angel's actual documented rate
+limits - getLtpData (what AngelLiveFeed.get_price() was using) is
+rate-limited at 1 request/second PER SYMBOL if called individually,
+which real users report tripping even below the published ceiling.
+For an 18-43 symbol watchlist ticking every 60s, that's 18-43
+sequential requests every tick - real risk at the larger end.
+
+Angel also offers getMarketData - up to 50 symbols in ONE API call,
+at the same 1 request/second limit but for the WHOLE BATCH, not per
+symbol. This is the right tool for a multi-symbol watchlist and I'd
+missed it when originally building the Angel integration.
+
+Added:
+- get_angel_ltp_bulk(symbols) in angel_feed.py: fetches all symbols in
+  one getMarketData call (mode="FULL", chunked at 50 symbols per call
+  in case the watchlist ever grows past that), writing every result
+  into the same _price_cache get_angel_ltp() reads from - so any
+  individual get_angel_ltp() call afterward just hits cache. Same
+  auth-error-retry pattern as the rest of this file. A symbol that
+  fails to resolve a token or doesn't come back in Angel's response is
+  simply absent from the result, not an exception - callers treat that
+  as "no fresh price this tick."
+- AngelLiveFeed.refresh_bulk() in bot_runner.py: thin wrapper that
+  populates self.prices from the bulk fetch.
+- Tick loop now calls feed.refresh_bulk(self.symbols) once per tick,
+  before the existing per-symbol loop, if the feed supports it
+  (checked via hasattr, so YahooLiveFeed - no such method - is
+  unaffected). The per-symbol get_price() calls that follow become
+  cache hits instead of firing individual requests.
+
+Verified with mocked multi-symbol getMarketData responses: 3 symbols
+fetched in exactly 1 API call (not 3), results correctly populate both
+the returned dict and the shared cache, and AngelLiveFeed.refresh_bulk
+correctly populates self.prices end-to-end. All 17 existing tests
+still pass.
+
+NOT live-tested against Angel's real getMarketData endpoint - the
+exact FULL-mode response field names are inferred from SmartAPI forum
+examples (tradingSymbol, symbolToken, ltp, close, high, low), not
+independently confirmed. Watch the first live tick after deploying for
+either normal price updates or a clear "getMarketData bulk fetch
+failed/returned failure" warning in the logs.
+---
+ app/bot_runner.py          | 16 +++++++
+ app/services/angel_feed.py | 85 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 101 insertions(+)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 9d6e754..559a1ca 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -113,6 +113,20 @@ class AngelLiveFeed:
+         self.prices[symbol] = price
+         return price
+ 
++    def refresh_bulk(self, symbols: list):
++        """Fetch ALL symbols' LTP in one Angel API call (getMarketData -
++        up to 50 symbols/call) instead of one getLtpData call per symbol.
++        Angel rate-limits both endpoints at 1 request/second, but that's
++        1 request per SYMBOL for getLtpData vs 1 request for the WHOLE
++        BATCH here - the difference between a watchlist of 18-43 symbols
++        needing 18-43 requests a tick versus needing 1. Populates
++        self.prices directly; get_price() calls later this tick just read
++        the cache this also writes to, no extra requests."""
++        from app.services.angel_feed import get_angel_ltp_bulk
++        results = get_angel_ltp_bulk(symbols)
++        for sym, data in results.items():
++            self.prices[sym] = data["last_price"]
++
+ class BotRunner:
+     def __init__(self, user_id: int = None):
+         self.user_id = user_id
+@@ -218,6 +232,8 @@ class BotRunner:
+                     continue
+                 now_ist = datetime.now(IST)
+                 today_str = now_ist.strftime("%Y-%m-%d")
++                if hasattr(self.feed, "refresh_bulk"):
++                    self.feed.refresh_bulk(self.symbols)
+                 for symbol in self.symbols:
+                     try:
+                         price = self.feed.get_price(symbol)
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index 3b0b734..fb087a9 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -354,3 +354,88 @@ def get_angel_ltp(symbol: str) -> dict:
+     data = _fetch_ltp(symbol)
+     _price_cache[symbol] = {"data": data, "fetched_at": now}
+     return data
++
++
++def get_angel_ltp_bulk(symbols: list) -> dict:
++    """Fetch LTP for MANY symbols in a single Angel API call, via
++    getMarketData - up to 50 symbols per call, rate-limited at 1 request/
++    second for this endpoint (vs. 1 rps for getLtpData too, but that's
++    1 rps PER SYMBOL if called individually - this is 1 rps for the whole
++    batch). Call this ONCE per tick instead of looping get_angel_ltp() per
++    symbol, and every result gets written into the same _price_cache
++    get_angel_ltp() reads from - so any code still calling get_angel_ltp()
++    per-symbol afterward just hits cache, no extra requests.
++
++    Returns {symbol: data_dict} for symbols that were fetched successfully;
++    a symbol missing from the result (couldn't find its token, or Angel's
++    response didn't include it) is simply absent from the returned dict -
++    callers should handle that as "no fresh price this tick", not raise.
++
++    NOT live-tested against Angel's real servers - the exact response
++    field names for FULL mode are inferred from SmartAPI forum examples,
++    not independently verified here."""
++    if not symbols:
++        return {}
++
++    tokens_to_symbol = {}
++    for sym in symbols:
++        try:
++            _, token = _get_token(sym)
++            tokens_to_symbol[token] = sym
++        except KeyError as e:
++            logger.warning(f"Skipping {sym} in bulk LTP fetch: {e}")
++
++    if not tokens_to_symbol:
++        return {}
++
++    results = {}
++    token_list = list(tokens_to_symbol.keys())
++    # getMarketData caps out around 50 tokens per call per Angel's docs -
++    # chunk defensively in case the watchlist ever grows past that.
++    for i in range(0, len(token_list), 50):
++        chunk = token_list[i:i + 50]
++        params = {"mode": "FULL", "exchangeTokens": {"NSE": chunk}}
++
++        api = _get_session()
++        try:
++            resp = api.getMarketData(params["mode"], params["exchangeTokens"])
++        except Exception as e:
++            logger.warning(f"Angel getMarketData bulk fetch failed for a chunk of {len(chunk)} symbols: {e}")
++            continue
++
++        if not _is_success(resp) and _is_auth_error(resp):
++            logger.warning("Angel session looks invalid/expired for bulk LTP fetch, re-logging in and retrying once.")
++            _reset_session()
++            api = _get_session()
++            try:
++                resp = api.getMarketData(params["mode"], params["exchangeTokens"])
++            except Exception as e:
++                logger.warning(f"Angel getMarketData retry also failed: {e}")
++                continue
++
++        if not _is_success(resp):
++            logger.warning(f"Angel getMarketData bulk fetch returned failure: {resp}")
++            continue
++
++        fetched = (resp.get("data") or {}).get("fetched") or []
++        now = datetime.utcnow()
++        for row in fetched:
++            token = str(row.get("symbolToken", ""))
++            sym = tokens_to_symbol.get(token)
++            if not sym:
++                continue
++            last_price = float(row.get("ltp", 0))
++            prev_close = float(row.get("close", last_price)) if row.get("close") else last_price
++            data = {
++                "symbol": sym,
++                "last_price": round(last_price, 2),
++                "previous_close": round(prev_close, 2),
++                "day_high": round(float(row.get("high", last_price)), 2),
++                "day_low": round(float(row.get("low", last_price)), 2),
++                "change_pct": round((last_price - prev_close) / prev_close * 100, 2) if prev_close else 0.0,
++                "fetched_at": now.isoformat(),
++            }
++            results[sym] = data
++            _price_cache[sym] = {"data": data, "fetched_at": now}
++
++    return results
+-- 
+2.43.0
+

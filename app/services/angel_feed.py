@@ -354,3 +354,88 @@ def get_angel_ltp(symbol: str) -> dict:
     data = _fetch_ltp(symbol)
     _price_cache[symbol] = {"data": data, "fetched_at": now}
     return data
+
+
+def get_angel_ltp_bulk(symbols: list) -> dict:
+    """Fetch LTP for MANY symbols in a single Angel API call, via
+    getMarketData - up to 50 symbols per call, rate-limited at 1 request/
+    second for this endpoint (vs. 1 rps for getLtpData too, but that's
+    1 rps PER SYMBOL if called individually - this is 1 rps for the whole
+    batch). Call this ONCE per tick instead of looping get_angel_ltp() per
+    symbol, and every result gets written into the same _price_cache
+    get_angel_ltp() reads from - so any code still calling get_angel_ltp()
+    per-symbol afterward just hits cache, no extra requests.
+
+    Returns {symbol: data_dict} for symbols that were fetched successfully;
+    a symbol missing from the result (couldn't find its token, or Angel's
+    response didn't include it) is simply absent from the returned dict -
+    callers should handle that as "no fresh price this tick", not raise.
+
+    NOT live-tested against Angel's real servers - the exact response
+    field names for FULL mode are inferred from SmartAPI forum examples,
+    not independently verified here."""
+    if not symbols:
+        return {}
+
+    tokens_to_symbol = {}
+    for sym in symbols:
+        try:
+            _, token = _get_token(sym)
+            tokens_to_symbol[token] = sym
+        except KeyError as e:
+            logger.warning(f"Skipping {sym} in bulk LTP fetch: {e}")
+
+    if not tokens_to_symbol:
+        return {}
+
+    results = {}
+    token_list = list(tokens_to_symbol.keys())
+    # getMarketData caps out around 50 tokens per call per Angel's docs -
+    # chunk defensively in case the watchlist ever grows past that.
+    for i in range(0, len(token_list), 50):
+        chunk = token_list[i:i + 50]
+        params = {"mode": "FULL", "exchangeTokens": {"NSE": chunk}}
+
+        api = _get_session()
+        try:
+            resp = api.getMarketData(params["mode"], params["exchangeTokens"])
+        except Exception as e:
+            logger.warning(f"Angel getMarketData bulk fetch failed for a chunk of {len(chunk)} symbols: {e}")
+            continue
+
+        if not _is_success(resp) and _is_auth_error(resp):
+            logger.warning("Angel session looks invalid/expired for bulk LTP fetch, re-logging in and retrying once.")
+            _reset_session()
+            api = _get_session()
+            try:
+                resp = api.getMarketData(params["mode"], params["exchangeTokens"])
+            except Exception as e:
+                logger.warning(f"Angel getMarketData retry also failed: {e}")
+                continue
+
+        if not _is_success(resp):
+            logger.warning(f"Angel getMarketData bulk fetch returned failure: {resp}")
+            continue
+
+        fetched = (resp.get("data") or {}).get("fetched") or []
+        now = datetime.utcnow()
+        for row in fetched:
+            token = str(row.get("symbolToken", ""))
+            sym = tokens_to_symbol.get(token)
+            if not sym:
+                continue
+            last_price = float(row.get("ltp", 0))
+            prev_close = float(row.get("close", last_price)) if row.get("close") else last_price
+            data = {
+                "symbol": sym,
+                "last_price": round(last_price, 2),
+                "previous_close": round(prev_close, 2),
+                "day_high": round(float(row.get("high", last_price)), 2),
+                "day_low": round(float(row.get("low", last_price)), 2),
+                "change_pct": round((last_price - prev_close) / prev_close * 100, 2) if prev_close else 0.0,
+                "fetched_at": now.isoformat(),
+            }
+            results[sym] = data
+            _price_cache[sym] = {"data": data, "fetched_at": now}
+
+    return results
