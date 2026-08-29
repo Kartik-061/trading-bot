@@ -1,0 +1,124 @@
+From 55763d9b86ef1e867ce937d5ea0376fcf324948e Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 29 Aug 2026 09:09:07 +0000
+Subject: [PATCH] Add account reset feature (POST /me/account/reset) + fix
+ missing Trade import
+
+Requested: a clean way to wipe accumulated trade history (which mixes
+many now-fixed bugs' effects - wrong position sizing, wrong RSI
+timeframe, missing costs at various points) and start fresh at a clean
+starting_capital, now that the underlying strategy bugs are fixed.
+
+Added UserBotManager.reset(user_id, confirm) and the route
+POST /me/account/reset?confirm=true:
+- Refuses without confirm=true (destructive, irreversible)
+- Refuses if the bot is currently running for that user (must stop
+  first - resetting history out from under a live tick loop is asking
+  for trouble)
+- Deletes all Trade, BotSession, and PortfolioSnapshot rows for that
+  user_id
+- Drops the in-memory BotRunner instance too, so the next start()
+  builds a completely fresh one rather than reusing an object that
+  still has old starting_capital/last_decision_date state in memory
+  even though the DB history is gone
+- Returns counts of what was deleted
+
+Also fixed along the way: Trade was never actually imported in
+bot_runner.py at all (only BotSession/PriceTick/PortfolioSnapshot were)
+- caught immediately by testing reset() for real, which would have
+  crashed with NameError on its very first real invocation.
+
+Verified end-to-end with an in-memory test DB: refuses without
+confirm=True, correctly deletes trade/session/snapshot rows for the
+target user_id when confirmed (checked directly against the DB
+afterward, not just the return value), and a fresh bot start
+afterward begins clean at the specified starting_capital with no
+resumed cash/positions - confirming reset really does clear the slate
+for _restore_state() to find nothing. All 17 existing tests still
+pass.
+---
+ app/bot_runner.py      | 41 ++++++++++++++++++++++++++++++++++++++++-
+ app/routes_user_bot.py |  9 +++++++++
+ 2 files changed, 49 insertions(+), 1 deletion(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index d8daf20..8200985 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -18,7 +18,7 @@ from app.strategies import STRATEGY_REGISTRY
+ from app.config import settings
+ from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
+ from app.services.price_feed import get_live_price
+-from app.models import BotSession, PriceTick, PortfolioSnapshot
++from app.models import BotSession, PriceTick, PortfolioSnapshot, Trade
+ 
+ logger = logging.getLogger("bot_runner")
+ 
+@@ -473,5 +473,44 @@ class UserBotManager:
+             return {"running": False, "results": []}
+         return self._runners[user_id].screener()
+ 
++    def reset(self, user_id: int, confirm: bool = False):
++        """Wipes this user's trading history (Trade, BotSession,
++        PortfolioSnapshot rows) so the next bot start begins completely
++        fresh - no history for _restore_state() to resume from, no old
++        starting_capital baseline to inherit. Irreversible, so requires
++        explicit confirm=True, and requires the bot to be stopped first
++        (resetting history out from under a live tick loop mid-write is
++        asking for trouble)."""
++        if not confirm:
++            return {"status": False, "reason": "confirmation_required"}
++        if user_id in self._runners and self._runners[user_id].running:
++            return {"status": False, "reason": "stop_bot_first"}
++
++        db = SessionLocal()
++        try:
++            trades_deleted = db.query(Trade).filter(Trade.user_id == user_id).delete()
++            sessions_deleted = db.query(BotSession).filter(BotSession.user_id == user_id).delete()
++            snapshots_deleted = db.query(PortfolioSnapshot).filter(PortfolioSnapshot.user_id == user_id).delete()
++            db.commit()
++        finally:
++            db.close()
++
++        # Drop the in-memory runner too (if one exists) - otherwise the
++        # next start() would reuse a BotRunner object that still has the
++        # old self.starting_capital/self.last_decision_date etc lingering
++        # in memory, even though the DB history is gone.
++        self._runners.pop(user_id, None)
++
++        logger.info(
++            f"Account reset for user_id={user_id}: {trades_deleted} trades, "
++            f"{sessions_deleted} sessions, {snapshots_deleted} snapshots deleted."
++        )
++        return {
++            "status": True,
++            "trades_deleted": trades_deleted,
++            "sessions_deleted": sessions_deleted,
++            "snapshots_deleted": snapshots_deleted,
++        }
++
+ 
+ user_bot_manager = UserBotManager()
+diff --git a/app/routes_user_bot.py b/app/routes_user_bot.py
+index 5b8f503..303c223 100644
+--- a/app/routes_user_bot.py
++++ b/app/routes_user_bot.py
+@@ -36,6 +36,15 @@ def stop_my_bot(current_user: User = Depends(get_current_user)):
+     return user_bot_manager.stop(current_user.id)
+ 
+ 
++@user_bot_router.post("/me/account/reset")
++def reset_my_account(confirm: bool = Query(False, description="Must be true - this is irreversible."),
++                      current_user: User = Depends(get_current_user)):
++    """Wipes this user's trade/session/snapshot history so the next bot
++    start begins completely fresh at whatever starting_capital is given
++    then. Bot must be stopped first. Irreversible."""
++    return user_bot_manager.reset(current_user.id, confirm=confirm)
++
++
+ @user_bot_router.get("/me/bot/status")
+ def my_bot_status(current_user: User = Depends(get_current_user)):
+     return user_bot_manager.status(current_user.id)
+-- 
+2.43.0
+

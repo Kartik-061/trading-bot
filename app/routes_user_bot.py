@@ -36,6 +36,15 @@ def stop_my_bot(current_user: User = Depends(get_current_user)):
     return user_bot_manager.stop(current_user.id)
 
 
+@user_bot_router.post("/me/account/reset")
+def reset_my_account(confirm: bool = Query(False, description="Must be true - this is irreversible."),
+                      current_user: User = Depends(get_current_user)):
+    """Wipes this user's trade/session/snapshot history so the next bot
+    start begins completely fresh at whatever starting_capital is given
+    then. Bot must be stopped first. Irreversible."""
+    return user_bot_manager.reset(current_user.id, confirm=confirm)
+
+
 @user_bot_router.get("/me/bot/status")
 def my_bot_status(current_user: User = Depends(get_current_user)):
     return user_bot_manager.status(current_user.id)

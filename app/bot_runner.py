@@ -18,7 +18,7 @@ from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
 from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
 from app.services.price_feed import get_live_price
-from app.models import BotSession, PriceTick, PortfolioSnapshot
+from app.models import BotSession, PriceTick, PortfolioSnapshot, Trade
 
 logger = logging.getLogger("bot_runner")
 
@@ -472,6 +472,45 @@ class UserBotManager:
         if user_id not in self._runners:
             return {"running": False, "results": []}
         return self._runners[user_id].screener()
+
+    def reset(self, user_id: int, confirm: bool = False):
+        """Wipes this user's trading history (Trade, BotSession,
+        PortfolioSnapshot rows) so the next bot start begins completely
+        fresh - no history for _restore_state() to resume from, no old
+        starting_capital baseline to inherit. Irreversible, so requires
+        explicit confirm=True, and requires the bot to be stopped first
+        (resetting history out from under a live tick loop mid-write is
+        asking for trouble)."""
+        if not confirm:
+            return {"status": False, "reason": "confirmation_required"}
+        if user_id in self._runners and self._runners[user_id].running:
+            return {"status": False, "reason": "stop_bot_first"}
+
+        db = SessionLocal()
+        try:
+            trades_deleted = db.query(Trade).filter(Trade.user_id == user_id).delete()
+            sessions_deleted = db.query(BotSession).filter(BotSession.user_id == user_id).delete()
+            snapshots_deleted = db.query(PortfolioSnapshot).filter(PortfolioSnapshot.user_id == user_id).delete()
+            db.commit()
+        finally:
+            db.close()
+
+        # Drop the in-memory runner too (if one exists) - otherwise the
+        # next start() would reuse a BotRunner object that still has the
+        # old self.starting_capital/self.last_decision_date etc lingering
+        # in memory, even though the DB history is gone.
+        self._runners.pop(user_id, None)
+
+        logger.info(
+            f"Account reset for user_id={user_id}: {trades_deleted} trades, "
+            f"{sessions_deleted} sessions, {snapshots_deleted} snapshots deleted."
+        )
+        return {
+            "status": True,
+            "trades_deleted": trades_deleted,
+            "sessions_deleted": sessions_deleted,
+            "snapshots_deleted": snapshots_deleted,
+        }
 
 
 user_bot_manager = UserBotManager()
