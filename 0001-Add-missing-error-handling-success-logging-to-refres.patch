@@ -1,0 +1,99 @@
+From 73e92974685dc2de5b5ca283e17d5b50fe4401c6 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 29 Aug 2026 04:03:30 +0000
+Subject: [PATCH] Add missing error handling + success logging to refresh_bulk
+ (was silent AND could crash the tick loop)
+
+Debugging today's "LTP frozen at avg_price all day" mystery hit a dead
+end: searching Render logs for "bulk"/"getMarketData"/"TCS" found
+nothing at all - not because the bulk fetch was failing, but because
+it had ZERO logging on success (only warnings on specific failure
+paths inside get_angel_ltp_bulk), making it impossible to tell from
+logs whether refresh_bulk was ever even being called, let alone
+succeeding.
+
+Separately, and more seriously: refresh_bulk() had no exception
+handling of its own. get_angel_ltp_bulk()'s internal try/except only
+wraps the actual api.getMarketData() call - but _get_session() (called
+before that try block) can itself raise a RuntimeError (e.g. missing
+ANGEL_API_KEY, or any other unexpected error establishing a session).
+That would propagate straight through get_angel_ltp_bulk, through
+refresh_bulk (no try/except), into the tick loop's outer exception
+handler - crashing the ENTIRE bot session over what should have been
+a single skipped tick, not just a missed bulk price update. If this
+happened repeatedly, it would fully explain positions never getting a
+fresh price all day: every tick's bulk fetch attempt was silently
+taking down the session before per-symbol fallback ever got a chance.
+
+Fix:
+- refresh_bulk() now has its own try/except around the whole call -
+  any failure logs a warning and simply means no fresh bulk prices
+  this tick (falling through to the existing per-symbol get_price()
+  calls, which already have their own error handling), never crashes
+  the loop.
+- Added an INFO log line on every refresh_bulk call reporting how many
+  symbols got fresh prices this tick, and a similar one inside
+  get_angel_ltp_bulk itself reporting fetched/unfetched counts and a
+  sample of tradingSymbols - so future debugging can directly confirm
+  from Render logs whether this is running and succeeding, instead of
+  inferring from silence.
+
+Verified: simulated _get_session() raising RuntimeError (the missing-
+credentials case, but representative of any session-establishment
+failure) - refresh_bulk now catches it, logs a clear warning, and
+returns normally instead of propagating. All 17 existing tests still
+pass.
+---
+ app/bot_runner.py          | 20 +++++++++++++++-----
+ app/services/angel_feed.py |  6 ++++++
+ 2 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index f571a30..d8daf20 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -121,11 +121,21 @@ class AngelLiveFeed:
+         BATCH here - the difference between a watchlist of 18-43 symbols
+         needing 18-43 requests a tick versus needing 1. Populates
+         self.prices directly; get_price() calls later this tick just read
+-        the cache this also writes to, no extra requests."""
+-        from app.services.angel_feed import get_angel_ltp_bulk
+-        results = get_angel_ltp_bulk(symbols)
+-        for sym, data in results.items():
+-            self.prices[sym] = data["last_price"]
++        the cache this also writes to, no extra requests.
++
++        Deliberately has its own try/except: a failure here (e.g. Angel
++        session login failing) must not crash the whole tick loop/bot
++        session - it should just mean no fresh bulk prices this tick,
++        falling through to the per-symbol get_price() calls (each of
++        which has its own error handling already)."""
++        try:
++            from app.services.angel_feed import get_angel_ltp_bulk
++            results = get_angel_ltp_bulk(symbols)
++            logger.info(f"refresh_bulk: got fresh prices for {len(results)}/{len(symbols)} symbols this tick.")
++            for sym, data in results.items():
++                self.prices[sym] = data["last_price"]
++        except Exception as e:
++            logger.warning(f"refresh_bulk failed entirely this tick (falling back to per-symbol fetch): {e}")
+ 
+ class BotRunner:
+     def __init__(self, user_id: int = None):
+diff --git a/app/services/angel_feed.py b/app/services/angel_feed.py
+index fb087a9..a240987 100644
+--- a/app/services/angel_feed.py
++++ b/app/services/angel_feed.py
+@@ -438,4 +438,10 @@ def get_angel_ltp_bulk(symbols: list) -> dict:
+             results[sym] = data
+             _price_cache[sym] = {"data": data, "fetched_at": now}
+ 
++        unfetched = (resp.get("data") or {}).get("unfetched") or []
++        logger.info(
++            f"Angel bulk LTP fetch: {len(fetched)} fetched, {len(unfetched)} unfetched, "
++            f"chunk of {len(chunk)} requested. Sample: {[r.get('tradingSymbol') for r in fetched[:3]]}"
++        )
++
+     return results
+-- 
+2.43.0
+

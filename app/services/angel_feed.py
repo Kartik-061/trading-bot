@@ -438,4 +438,10 @@ def get_angel_ltp_bulk(symbols: list) -> dict:
             results[sym] = data
             _price_cache[sym] = {"data": data, "fetched_at": now}
 
+        unfetched = (resp.get("data") or {}).get("unfetched") or []
+        logger.info(
+            f"Angel bulk LTP fetch: {len(fetched)} fetched, {len(unfetched)} unfetched, "
+            f"chunk of {len(chunk)} requested. Sample: {[r.get('tradingSymbol') for r in fetched[:3]]}"
+        )
+
     return results

@@ -121,11 +121,21 @@ class AngelLiveFeed:
         BATCH here - the difference between a watchlist of 18-43 symbols
         needing 18-43 requests a tick versus needing 1. Populates
         self.prices directly; get_price() calls later this tick just read
-        the cache this also writes to, no extra requests."""
-        from app.services.angel_feed import get_angel_ltp_bulk
-        results = get_angel_ltp_bulk(symbols)
-        for sym, data in results.items():
-            self.prices[sym] = data["last_price"]
+        the cache this also writes to, no extra requests.
+
+        Deliberately has its own try/except: a failure here (e.g. Angel
+        session login failing) must not crash the whole tick loop/bot
+        session - it should just mean no fresh bulk prices this tick,
+        falling through to the per-symbol get_price() calls (each of
+        which has its own error handling already)."""
+        try:
+            from app.services.angel_feed import get_angel_ltp_bulk
+            results = get_angel_ltp_bulk(symbols)
+            logger.info(f"refresh_bulk: got fresh prices for {len(results)}/{len(symbols)} symbols this tick.")
+            for sym, data in results.items():
+                self.prices[sym] = data["last_price"]
+        except Exception as e:
+            logger.warning(f"refresh_bulk failed entirely this tick (falling back to per-symbol fetch): {e}")
 
 class BotRunner:
     def __init__(self, user_id: int = None):
