@@ -182,10 +182,19 @@ def _get_session():
         return _smart_api
 
 
-def _reset_session():
+def _reset_session(stale_api=None):
+    """Only actually clears the session if it's still the same object that
+    triggered the failure. Two requests can hit an expired token around
+    the same moment (seen live: an ltpData call and a getCandleData call
+    both failing within the same second) - without this guard, both would
+    reset+relogin independently, with the second reset clobbering the
+    first request's already-fresh session and forcing a wasted duplicate
+    login. Passing the stale `api` reference each caller was using makes
+    this a no-op if someone else already refreshed it."""
     global _smart_api
     with _session_lock:
-        _smart_api = None
+        if stale_api is None or _smart_api is stale_api:
+            _smart_api = None
 
 
 _AUTH_ERROR_CODES = {"AG8001", "AG8002"}  # Invalid Token / Token expired, per Angel's error codes
@@ -221,7 +230,7 @@ def _fetch_ltp(symbol: str) -> dict:
 
     if resp is None or (not _is_success(resp) and _is_auth_error(resp) and not retried):
         logger.warning(f"Angel session looks invalid/expired for {symbol} ({resp}), re-logging in and retrying once.")
-        _reset_session()
+        _reset_session(stale_api=api)
         api = _get_session()
         resp = api.ltpData("NSE", tradingsymbol, token)
         retried = True
@@ -316,7 +325,7 @@ def _get_ohlc_by_token(token: str, period: str = "1y", label: str = "") -> list:
 
     if not _is_success(resp) and _is_auth_error(resp):
         logger.warning(f"Angel session looks invalid/expired fetching OHLC for {label or token}, re-logging in and retrying once.")
-        _reset_session()
+        _reset_session(stale_api=api)
         api = _get_session()
         resp = _call_candle_data_with_retry(api, params, label or token)
 
@@ -405,7 +414,7 @@ def get_angel_ltp_bulk(symbols: list) -> dict:
 
         if not _is_success(resp) and _is_auth_error(resp):
             logger.warning("Angel session looks invalid/expired for bulk LTP fetch, re-logging in and retrying once.")
-            _reset_session()
+            _reset_session(stale_api=api)
             api = _get_session()
             try:
                 resp = api.getMarketData(params["mode"], params["exchangeTokens"])

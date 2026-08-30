@@ -1,0 +1,119 @@
+From 5b65d2b3dcacba4e32f17e7d5f29ac213260bcce Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Sat, 29 Aug 2026 14:19:01 +0000
+Subject: [PATCH] Fix TATAMOTORS->TMPV (re-applied, prior attempt didn't sync
+ from Lovable) + add Reset Account button
+
+The earlier TATAMOTORS->TMPV patch was reported applied via Lovable's
+own chat interface but never actually reached GitHub main - confirmed
+by a fresh clone still showing TATAMOTORS. Re-applying it directly
+here.
+
+Also adds a Reset Account button (Live Bot page) wired to the new
+POST /me/account/reset backend endpoint - two-step confirmation
+(click once to arm, shows 'Confirm Reset?' for 5s, click again to
+actually proceed), disabled while the bot is running to match the
+backend's own safety check. Wipes trade/session/snapshot history so
+the next Start Bot begins completely fresh.
+---
+ src/lib/api.ts          |  1 +
+ src/routes/live-bot.tsx | 47 +++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 44 insertions(+), 4 deletions(-)
+
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index a8885ae..5e63cae 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -591,6 +591,7 @@ export const startBot = (body: Record<string, unknown>) =>
+     starting_capital: Number(body['starting_capital'] ?? 100000),
+   });
+ export const stopBot = () => meApi.post("/me/bot/stop", {});
++export const resetAccount = () => meApi.post("/me/account/reset", undefined, { confirm: true });
+ export const runBacktest = async (body: Record<string, unknown>) =>
+   normalizeBacktest(await api.post("/backtest/historical", undefined, {
+     strategy: String(body['strategy'] ?? ""),
+diff --git a/src/routes/live-bot.tsx b/src/routes/live-bot.tsx
+index 7753e27..46d6eb5 100644
+--- a/src/routes/live-bot.tsx
++++ b/src/routes/live-bot.tsx
+@@ -10,7 +10,7 @@ import { ErrorState, Panel, SkeletonRows, Tag } from "@/components/kit";
+ import { PositionsTable } from "@/components/PositionsTable";
+ import { SignalsFeed } from "@/components/SignalsFeed";
+ import { botStatusQuery, screenerQuery } from "@/lib/queries";
+-import { startBot, stopBot } from "@/lib/api";
++import { startBot, stopBot, resetAccount } from "@/lib/api";
+ import { duration, stamp } from "@/lib/format";
+ import { STRATEGIES } from "@/lib/strategies";
+ import { cn } from "@/lib/utils";
+@@ -44,7 +44,7 @@ function LiveBot() {
+   
+ 
+   const [strategy, setStrategy] = useState<string>("mean_reversion");
+-  const [symbols, setSymbols] = useState("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,SBIN,BHARTIARTL,ITC,LT,KOTAKBANK,AXISBANK,MARUTI,SUNPHARMA,TITAN,ASIANPAINT,BAJFINANCE,HCLTECH,WIPRO,ADANIENT,TATAMOTORS,ULTRACEMCO,NESTLEIND,POWERGRID,NTPC,ONGC,COALINDIA,BAJAJFINSV,HINDUNILVR,JSWSTEEL,TATASTEEL,GRASIM,CIPLA,DRREDDY,DIVISLAB,EICHERMOT,HEROMOTOCO,BAJAJ-AUTO,BPCL,INDUSINDBK,M&M,SBILIFE,HDFCLIFE,TECHM");
++  const [symbols, setSymbols] = useState("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,SBIN,BHARTIARTL,ITC,LT,KOTAKBANK,AXISBANK,MARUTI,SUNPHARMA,TITAN,ASIANPAINT,BAJFINANCE,HCLTECH,WIPRO,ADANIENT,TMPV,ULTRACEMCO,NESTLEIND,POWERGRID,NTPC,ONGC,COALINDIA,BAJAJFINSV,HINDUNILVR,JSWSTEEL,TATASTEEL,GRASIM,CIPLA,DRREDDY,DIVISLAB,EICHERMOT,HEROMOTOCO,BAJAJ-AUTO,BPCL,INDUSINDBK,M&M,SBILIFE,HDFCLIFE,TECHM");
+   const [interval, setInterval] = useState("60");
+   const [startingCapital, setStartingCapital] = useState("100000");
+   const capitalTouched = useRef(false);
+@@ -79,6 +79,20 @@ function LiveBot() {
+     onError: (e: Error) => toast.error(e.message),
+   });
+ 
++  const [resetArmed, setResetArmed] = useState(false);
++  const reset = useMutation({
++    mutationFn: () => resetAccount(),
++    onSuccess: () => {
++      toast.success("Account reset - trade history cleared. Next start begins fresh.");
++      setResetArmed(false);
++      invalidate();
++    },
++    onError: (e: Error) => {
++      toast.error(e.message);
++      setResetArmed(false);
++    },
++  });
++
+   const s = status.data;
+   const running = s?.running ?? false;
+ 
+@@ -175,11 +189,36 @@ function LiveBot() {
+             >
+               <Square className="h-3 w-3" /> {stop.isPending ? "Stopping…" : "Stop Bot"}
+             </button>
++            <button
++              onClick={() => {
++                if (resetArmed) {
++                  reset.mutate();
++                } else {
++                  setResetArmed(true);
++                  setTimeout(() => setResetArmed(false), 5000);
++                }
++              }}
++              disabled={running || reset.isPending}
++              className={cn(
++                "inline-flex items-center gap-1.5 h-7 px-3 rounded-[2px] text-[12px] font-medium disabled:opacity-40 ml-auto",
++                resetArmed
++                  ? "bg-loss text-white"
++                  : "border border-border text-muted-foreground hover:text-foreground",
++              )}
++              title="Wipes all trade/session history so the next start begins completely fresh. Irreversible. Bot must be stopped first."
++            >
++              {reset.isPending ? "Resetting…" : resetArmed ? "Confirm Reset? (click again)" : "Reset Account"}
++            </button>
+           </div>
+-          {(start.error || stop.error) && (
+-            <ErrorState error={start.error ?? stop.error} compact />
++          {(start.error || stop.error || reset.error) && (
++            <ErrorState error={start.error ?? stop.error ?? reset.error} compact />
+           )}
+         </Panel>
++        {resetArmed && (
++          <div className="text-[11px] text-loss px-1 -mt-2">
++            This permanently deletes all trade/session history for this account. Click "Confirm Reset?" again to proceed, or wait 5s to cancel.
++          </div>
++        )}
+ 
+         <Panel title="Current Status" className="lg:col-span-2" bodyClassName="p-3">
+           {status.isLoading ? (
+-- 
+2.43.0
+
