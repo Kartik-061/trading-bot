@@ -286,6 +286,10 @@ class BotRunner:
                     signal = self.strategies[symbol].decide(price, holding)
                     self.last_signal[symbol] = signal
                     self.last_decision_date[symbol] = today_str
+                    logger.info(
+                        f"Decision for {symbol} (user_id={self.user_id}): {signal} "
+                        f"(price={price}, holding={holding}, date={today_str})"
+                    )
                     if signal == "BUY":
                         # Size like engine.py does: capital_pct_per_trade of
                         # current cash, not a fixed share count. This is the

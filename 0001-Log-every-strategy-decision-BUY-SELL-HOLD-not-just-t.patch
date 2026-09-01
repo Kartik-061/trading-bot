@@ -1,0 +1,42 @@
+From ce5ba0d82fce04eb2b54ae05169c76bfdcf25404 Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@local>
+Date: Tue, 1 Sep 2026 19:51:10 +0000
+Subject: [PATCH] Log every strategy decision (BUY/SELL/HOLD), not just trades
+
+Zero visibility into whether the once-daily decision window was
+actually firing at all - the only way to tell 'decided HOLD for every
+symbol' apart from 'the decision logic never ran' was to look for
+resulting trades, and both cases look identical from the outside (no
+trades either way). Reported today: 3 days with no trades and no way
+to confirm whether that's genuinely no signals firing (statistically
+plausible - ~18-20% chance of a random 3-day zero-trade stretch given
+expected trade frequency) or the decision window silently not running.
+
+Added an INFO log line for every decision (not just BUY/SELL) showing
+the symbol, signal, price, holding, and date. Going forward, checking
+logs around the 15:20-15:30 IST decision window will show either a
+full set of HOLD decisions (confirming the logic ran, just no signals
+triggered - expected/fine) or nothing at all (confirming an actual
+bug worth investigating), instead of both cases looking identical.
+---
+ app/bot_runner.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 8200985..b5822d5 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -286,6 +286,10 @@ class BotRunner:
+                     signal = self.strategies[symbol].decide(price, holding)
+                     self.last_signal[symbol] = signal
+                     self.last_decision_date[symbol] = today_str
++                    logger.info(
++                        f"Decision for {symbol} (user_id={self.user_id}): {signal} "
++                        f"(price={price}, holding={holding}, date={today_str})"
++                    )
+                     if signal == "BUY":
+                         # Size like engine.py does: capital_pct_per_trade of
+                         # current cash, not a fixed share count. This is the
+-- 
+2.43.0
+
