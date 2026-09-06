@@ -1,0 +1,61 @@
+From 6e20f2c75c04a680003db88de5dd41f57916c93e Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@alpha-terminal.local>
+Date: Sun, 6 Sep 2026 06:52:11 +0000
+Subject: [PATCH] chore: add MIT LICENSE, CI/license/python badges to README,
+ link wiki
+
+---
+ LICENSE   | 21 +++++++++++++++++++++
+ README.md |  5 +++++
+ 2 files changed, 26 insertions(+)
+ create mode 100644 LICENSE
+
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..ca15790
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 Kartikya Motwani
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/README.md b/README.md
+index 6231e82..149d4c1 100644
+--- a/README.md
++++ b/README.md
+@@ -1,9 +1,14 @@
+ # NSE Quant Desk — Algorithmic Trading Bot
+ 
++[![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml)
++[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
++[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
++
+ A full-stack algorithmic trading system for NSE (Indian stock market) equities, built end-to-end: real price data, honest cost modeling, statistically validated strategy selection, and a live paper-trading engine with per-user accounts.
+ 
+ **Live app:** https://strat-guardian-ui.lovable.app
+ **API:** https://trading-bot-s2zl.onrender.com (docs at `/docs`)
++**Wiki:** [Architecture, methodology, strategies, and known limitations](https://github.com/Kartik-061/trading-bot/wiki)
+ 
+ > Paper trading only. No real capital is connected. Research and educational project — not investment advice.
+ 
+-- 
+2.43.0
+

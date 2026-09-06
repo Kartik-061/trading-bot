@@ -1,9 +1,14 @@
 # NSE Quant Desk — Algorithmic Trading Bot
 
+[![Tests](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/Kartik-061/trading-bot/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+
 A full-stack algorithmic trading system for NSE (Indian stock market) equities, built end-to-end: real price data, honest cost modeling, statistically validated strategy selection, and a live paper-trading engine with per-user accounts.
 
 **Live app:** https://strat-guardian-ui.lovable.app
 **API:** https://trading-bot-s2zl.onrender.com (docs at `/docs`)
+**Wiki:** [Architecture, methodology, strategies, and known limitations](https://github.com/Kartik-061/trading-bot/wiki)
 
 > Paper trading only. No real capital is connected. Research and educational project — not investment advice.
 
