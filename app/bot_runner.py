@@ -269,6 +269,23 @@ class BotRunner:
                     continue
                 now_ist = datetime.now(IST)
                 today_str = now_ist.strftime("%Y-%m-%d")
+                # --- TEMP DIAGNOSTIC (remove once the missing-decision-logs
+                # bug is confirmed fixed) --- prints every tick, not just
+                # when a decision actually fires, so we can see directly
+                # whether is_decision_time() is evaluating False (and why),
+                # or True-but-something-downstream-is-swallowing-it, or
+                # whether last_decision_date already has today's entries
+                # for every symbol despite the restart.
+                already_decided_today = sum(
+                    1 for sym in self.symbols if self.last_decision_date.get(sym) == today_str
+                )
+                logger.info(
+                    f"[DIAG] user_id={self.user_id} runner_id={id(self)} "
+                    f"now_ist={now_ist.isoformat()} today_str={today_str} "
+                    f"is_decision_time={is_decision_time(now_ist)} "
+                    f"strategy_name={self.strategy_name} "
+                    f"already_decided_today={already_decided_today}/{len(self.symbols)}"
+                )
                 if hasattr(self.feed, "refresh_bulk"):
                     self.feed.refresh_bulk(self.symbols)
                 for symbol in self.symbols:
