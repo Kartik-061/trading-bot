@@ -1,0 +1,34 @@
+From 2cbe2aae4eb76b001995221e564dda156259e33b Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@alpha-terminal.local>
+Date: Tue, 8 Sep 2026 05:22:05 +0000
+Subject: [PATCH] fix: clear stale MARKET_CLOSED signal on market open, before
+ decision window fires
+
+---
+ app/bot_runner.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 488cef1..c4aa31a 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -269,6 +269,16 @@ class BotRunner:
+                     continue
+                 now_ist = datetime.now(IST)
+                 today_str = now_ist.strftime("%Y-%m-%d")
++                # Market just opened (or bot just started intraday) - clear any
++                # stale "MARKET_CLOSED" signal left over from the last time the
++                # market was shut. Without this, the Live Signals display kept
++                # showing every symbol as CLOSED from market-open (9:15 IST)
++                # until the once-daily decision window (15:20 IST) actually ran
++                # and overwrote it - misleadingly implying the bot wasn't
++                # working for ~6 hours a day when it was running fine.
++                for sym in self.symbols:
++                    if self.last_signal.get(sym) == "MARKET_CLOSED":
++                        self.last_signal[sym] = "HOLD"
+                 # --- TEMP DIAGNOSTIC (remove once the missing-decision-logs
+                 # bug is confirmed fixed) --- prints every tick, not just
+                 # when a decision actually fires, so we can see directly
+-- 
+2.43.0
+

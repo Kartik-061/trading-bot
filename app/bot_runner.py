@@ -269,6 +269,16 @@ class BotRunner:
                     continue
                 now_ist = datetime.now(IST)
                 today_str = now_ist.strftime("%Y-%m-%d")
+                # Market just opened (or bot just started intraday) - clear any
+                # stale "MARKET_CLOSED" signal left over from the last time the
+                # market was shut. Without this, the Live Signals display kept
+                # showing every symbol as CLOSED from market-open (9:15 IST)
+                # until the once-daily decision window (15:20 IST) actually ran
+                # and overwrote it - misleadingly implying the bot wasn't
+                # working for ~6 hours a day when it was running fine.
+                for sym in self.symbols:
+                    if self.last_signal.get(sym) == "MARKET_CLOSED":
+                        self.last_signal[sym] = "HOLD"
                 # --- TEMP DIAGNOSTIC (remove once the missing-decision-logs
                 # bug is confirmed fixed) --- prints every tick, not just
                 # when a decision actually fires, so we can see directly
