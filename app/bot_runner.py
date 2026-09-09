@@ -132,12 +132,9 @@ class YahooLiveFeed:
         return price
 
 
-class AngelLiveFeed:
-    """Same interface as YahooLiveFeed - backed by Angel One SmartAPI market
-    data instead of yfinance. Data-only (never places orders), so it works
-    on Render's free tier without a static IP. Selected via PRICE_FEED=angel."""
     def __init__(self, symbols: list):
         self.prices = {}
+        self.last_quotes = {}  # symbol -> full quote dict (last_price, previous_close, change_pct)
 
     def get_price(self, symbol: str) -> float:
         from app.services.angel_feed import get_angel_ltp
@@ -167,6 +164,7 @@ class AngelLiveFeed:
             logger.info(f"refresh_bulk: got fresh prices for {len(results)}/{len(symbols)} symbols this tick.")
             for sym, data in results.items():
                 self.prices[sym] = data["last_price"]
+                self.last_quotes[sym] = data  # includes correct change_pct vs previous session close
         except Exception as e:
             logger.warning(f"refresh_bulk failed entirely this tick (falling back to per-symbol fetch): {e}")
 
@@ -499,21 +497,32 @@ class BotRunner:
     def screener(self):
         """Ranks the watchlist by recent momentum. This is the honest version
         of 'best stock' - not a prediction, just which symbols currently have
-        the strongest recent move AND a live signal from the strategy."""
+        the strongest recent move AND a live signal from the strategy.
+
+        BUG FIX: this used to compute momentum from strategy.prices[0] vs
+        strategy.prices[-1] - but that deque holds one DAILY CLOSE per
+        trading day (decisions only run once/day), so it was actually
+        showing "% change since the bot was last restarted", not today's
+        move - and after the RSI warm-start fix seeded ~30 days of real
+        history into that same deque, this got dramatically worse (showing
+        ~6-week swings mislabeled as live momentum, e.g. displaying +21%
+        for a stock that hadn't actually moved 21% in a single session).
+        Fixed to use the feed's own change_pct, computed correctly from
+        Angel's real previous-session close vs current live price - the
+        same day-change % any broker terminal shows, decoupled entirely
+        from the RSI history deque."""
         if not self.running or not self.feed:
             return {"running": False, "results": []}
 
+        last_quotes = getattr(self.feed, "last_quotes", {})
         results = []
         for symbol in self.symbols:
-            strat = self.strategies[symbol]
-            prices = list(strat.prices) if hasattr(strat, "prices") else []
-            if len(prices) >= 2:
-                momentum_pct = round((prices[-1] - prices[0]) / prices[0] * 100, 3)
-            else:
-                momentum_pct = 0.0
+            quote = last_quotes.get(symbol, {})
+            last_price = quote.get("last_price", self.feed.prices.get(symbol))
+            momentum_pct = quote.get("change_pct", 0.0)
             results.append({
                 "symbol": symbol,
-                "last_price": prices[-1] if prices else None,
+                "last_price": last_price,
                 "momentum_pct": momentum_pct,
                 "signal": self.last_signal.get(symbol, "HOLD"),
                 "holding_qty": self.broker.get_holding_qty(symbol) if self.broker else 0,
