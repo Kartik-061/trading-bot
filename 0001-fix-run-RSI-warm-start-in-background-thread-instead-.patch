@@ -1,0 +1,52 @@
+From f51a7507cd5af0ac5305f43719839cbd69f0c91c Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@alpha-terminal.local>
+Date: Wed, 9 Sep 2026 18:46:50 +0000
+Subject: [PATCH] fix: run RSI warm-start in background thread instead of
+ blocking start()/the HTTP request - yfinance flakiness was stalling Start Bot
+ past request timeout
+
+---
+ app/bot_runner.py | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index 4b48a02..c401352 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -100,7 +100,7 @@ def _warm_start_price_history(strategies: dict, symbols: list, lookback_days: in
+             continue  # strategy doesn't use a price-history deque at all
+         try:
+             ticker = yf.Ticker(f"{symbol.upper()}.NS")
+-            hist = ticker.history(period=f"{lookback_days}d", interval="1d")
++            hist = ticker.history(period=f"{lookback_days}d", interval="1d", timeout=10)
+             closes = [float(c) for c in hist["Close"].tolist() if c == c]  # drop NaN
+             for close in closes:
+                 strategy.prices.append(close)
+@@ -275,7 +275,23 @@ class BotRunner:
+         self.symbols = symbols
+         self.strategy_name = strategy_name
+         self.strategies = {sym: strategy_cls() for sym in symbols}
+-        _warm_start_price_history(self.strategies, symbols)
++        # BUG FIX: this used to run synchronously right here, meaning
++        # start() (and therefore the /api/me/bot/start HTTP request) would
++        # not return until 43 sequential yfinance calls finished. yfinance
++        # is already known to be flaky/rate-limited (see the Invalid Crumb
++        # errors on the Research page) - one slow or hanging symbol was
++        # enough to stall the whole request past any reasonable client/
++        # proxy timeout, making "Start Bot" look completely broken even
++        # though the backend might have eventually finished. Warm-starting
++        # is a nice-to-have (RSI just falls back to its normal live
++        # buildup if it doesn't finish in time), not something worth
++        # blocking bot startup on - so it now runs in its own background
++        # thread, and start() returns immediately like it always did before.
++        threading.Thread(
++            target=_warm_start_price_history,
++            args=(self.strategies, symbols),
++            daemon=True,
++        ).start()
+         self.tick_seconds = tick_seconds
+         self.last_signal = {sym: "HOLD" for sym in symbols}
+         self.last_decision_date = {}
+-- 
+2.43.0
+
