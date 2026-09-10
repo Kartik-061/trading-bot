@@ -522,6 +522,30 @@ class BotRunner:
         starting_capital = self.starting_capital
         total_return_pct = round((current_value - starting_capital) / starting_capital * 100, 2) if starting_capital else 0
 
+        # BUG FIX: this used to return self.broker.positions as-is, which
+        # only ever stores {"qty": ..., "avg_price": ...} - no live price
+        # at all. The frontend's Open Positions table was falling back to
+        # displaying avg_price in the LTP column too, so every single
+        # position always showed exactly ₹0.00 / 0.00% P&L regardless of
+        # how the stock actually moved, even while the equity curve right
+        # above it (which does use latest_prices) moved correctly. Now
+        # each position is enriched with its real current price and P&L
+        # before being sent to the frontend.
+        enriched_positions = {}
+        for sym, pos in self.broker.positions.items():
+            if pos.get("qty", 0) <= 0:
+                continue
+            ltp = latest_prices.get(sym, pos.get("avg_price", 0))
+            avg_price = pos.get("avg_price", 0)
+            pnl = round((ltp - avg_price) * pos["qty"], 2)
+            pnl_pct = round((ltp - avg_price) / avg_price * 100, 2) if avg_price else 0.0
+            enriched_positions[sym] = {
+                **pos,
+                "ltp": ltp,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
+            }
+
         return {
             "running": True,
             "session_id": self.session_id,
@@ -530,7 +554,7 @@ class BotRunner:
             "started_at": started_at,
             "market_open": is_market_open(),
             "cash": self.broker.cash,
-            "positions": self.broker.positions,
+            "positions": enriched_positions,
             "portfolio_value": current_value,
             "starting_capital": starting_capital,
             "total_return_pct": total_return_pct,
