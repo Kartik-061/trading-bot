@@ -1,0 +1,49 @@
+From f00054d836ac5131268cd44e8d866aac53932b3e Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@alpha-terminal.local>
+Date: Thu, 10 Sep 2026 03:58:38 +0000
+Subject: [PATCH] fix: broker/feed init now inside the try block, so a startup
+ failure resets self.running instead of leaving the bot permanently stuck
+ reporting already_running with no live thread
+
+---
+ app/bot_runner.py | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index c401352..df253c7 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -304,12 +304,25 @@ class BotRunner:
+ 
+     def _run_loop(self):
+         db = SessionLocal()
+-        self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
+-        self.broker.connect()
+-
+-        self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
+-
+         try:
++            # BUG FIX: broker/feed setup used to happen *before* this
++            # try block, so any exception here (a bad DB connection, an
++            # Angel One session failure, anything) killed this background
++            # thread silently, without ever reaching the `self.running =
++            # False` reset below - since that reset only lived inside the
++            # main loop's own except clause. self.running had already been
++            # set True by start() right before this thread launched, so it
++            # stayed stuck True forever with no live thread behind it.
++            # status() correctly noticed the dead thread and reported
++            # "STOPPED", but start()'s own "already_running" guard checks
++            # self.running directly - so every future Start Bot click kept
++            # failing with already_running, with no way to recover short
++            # of a full process restart. Now any failure here is caught
++            # and cleaned up the same way a mid-loop crash already was.
++            self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
++            self.broker.connect()
++            self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
++
+             while self.running:
+                 if not is_market_open():
+                     self.last_signal = {sym: "MARKET_CLOSED" for sym in self.symbols}
+-- 
+2.43.0
+

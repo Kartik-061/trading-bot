@@ -304,12 +304,25 @@ class BotRunner:
 
     def _run_loop(self):
         db = SessionLocal()
-        self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
-        self.broker.connect()
-
-        self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
-
         try:
+            # BUG FIX: broker/feed setup used to happen *before* this
+            # try block, so any exception here (a bad DB connection, an
+            # Angel One session failure, anything) killed this background
+            # thread silently, without ever reaching the `self.running =
+            # False` reset below - since that reset only lived inside the
+            # main loop's own except clause. self.running had already been
+            # set True by start() right before this thread launched, so it
+            # stayed stuck True forever with no live thread behind it.
+            # status() correctly noticed the dead thread and reported
+            # "STOPPED", but start()'s own "already_running" guard checks
+            # self.running directly - so every future Start Bot click kept
+            # failing with already_running, with no way to recover short
+            # of a full process restart. Now any failure here is caught
+            # and cleaned up the same way a mid-loop crash already was.
+            self.broker = PaperBroker(db, self.starting_capital, self.strategy_name, user_id=self.user_id)
+            self.broker.connect()
+            self.feed = AngelLiveFeed(self.symbols) if settings.PRICE_FEED == "angel" else YahooLiveFeed(self.symbols)
+
             while self.running:
                 if not is_market_open():
                     self.last_signal = {sym: "MARKET_CLOSED" for sym in self.symbols}
