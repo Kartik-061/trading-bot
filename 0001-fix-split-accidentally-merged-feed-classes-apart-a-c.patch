@@ -1,0 +1,52 @@
+From 08e793788be0830d799bf0fdd98b0928e6a07c9c Mon Sep 17 00:00:00 2001
+From: Kartikya Motwani <kartikya@alpha-terminal.local>
+Date: Thu, 10 Sep 2026 04:06:37 +0000
+Subject: [PATCH] fix: split accidentally-merged feed classes apart - a class
+ literally named YahooLiveFeed had its Angel-based methods silently override
+ its own __init__ (two __init__ in one class body), while the
+ actually-selected AngelLiveFeed import was a separate, broken, never-updated
+ legacy class requiring broker+token_map. This is what crashed _run_loop with
+ 'missing token_map' on every fresh start.
+
+---
+ app/bot_runner.py | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/app/bot_runner.py b/app/bot_runner.py
+index df253c7..ea410e9 100644
+--- a/app/bot_runner.py
++++ b/app/bot_runner.py
+@@ -17,7 +17,7 @@ from app.broker.paper_broker import PaperBroker
+ from app.data_feed.feeds import SimulatedFeed
+ from app.strategies import STRATEGY_REGISTRY
+ from app.config import settings
+-from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
++from app.data_feed.feeds import SimulatedFeed
+ from app.services.price_feed import get_live_price
+ from app.models import BotSession, PriceTick, PortfolioSnapshot, Trade
+ 
+@@ -132,6 +132,21 @@ class YahooLiveFeed:
+         return price
+ 
+ 
++class AngelLiveFeed:
++    """Real near-real-time NSE prices via Angel One SmartAPI (data-only,
++    never places orders). Selected via PRICE_FEED=angel.
++
++    BUG FIX: this class's methods used to be accidentally merged into the
++    YahooLiveFeed class above (two `def __init__` in one class body - the
++    second silently overrode the first), so a class literally named
++    "YahooLiveFeed" was actually making Angel API calls, while this
++    project also imported a separate, older, broken AngelLiveFeed from
++    app.data_feed.feeds (constructor needing broker+token_map, never
++    updated to match the real Angel integration) - and THAT broken one is
++    what actually got constructed whenever PRICE_FEED=angel, crashing
++    _run_loop instantly with a TypeError every time. Split back into two
++    properly separated, correctly-named classes so PRICE_FEED=angel
++    actually constructs the working implementation."""
+     def __init__(self, symbols: list):
+         self.prices = {}
+         self.last_quotes = {}  # symbol -> full quote dict (last_price, previous_close, change_pct)
+-- 
+2.43.0
+

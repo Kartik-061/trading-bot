@@ -17,7 +17,7 @@ from app.broker.paper_broker import PaperBroker
 from app.data_feed.feeds import SimulatedFeed
 from app.strategies import STRATEGY_REGISTRY
 from app.config import settings
-from app.data_feed.feeds import SimulatedFeed, AngelLiveFeed
+from app.data_feed.feeds import SimulatedFeed
 from app.services.price_feed import get_live_price
 from app.models import BotSession, PriceTick, PortfolioSnapshot, Trade
 
@@ -132,6 +132,21 @@ class YahooLiveFeed:
         return price
 
 
+class AngelLiveFeed:
+    """Real near-real-time NSE prices via Angel One SmartAPI (data-only,
+    never places orders). Selected via PRICE_FEED=angel.
+
+    BUG FIX: this class's methods used to be accidentally merged into the
+    YahooLiveFeed class above (two `def __init__` in one class body - the
+    second silently overrode the first), so a class literally named
+    "YahooLiveFeed" was actually making Angel API calls, while this
+    project also imported a separate, older, broken AngelLiveFeed from
+    app.data_feed.feeds (constructor needing broker+token_map, never
+    updated to match the real Angel integration) - and THAT broken one is
+    what actually got constructed whenever PRICE_FEED=angel, crashing
+    _run_loop instantly with a TypeError every time. Split back into two
+    properly separated, correctly-named classes so PRICE_FEED=angel
+    actually constructs the working implementation."""
     def __init__(self, symbols: list):
         self.prices = {}
         self.last_quotes = {}  # symbol -> full quote dict (last_price, previous_close, change_pct)
