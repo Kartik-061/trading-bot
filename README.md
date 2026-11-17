@@ -6,8 +6,7 @@
 
 A full-stack algorithmic trading system for NSE (Indian stock market) equities, built end-to-end: real price data, honest cost modeling, statistically validated strategy selection, and a live paper-trading engine with per-user accounts.
 
-**Live app:** https://strat-guardian-ui.lovable.app
-**API:** https://trading-bot-s2zl.onrender.com (docs at `/docs`)
+**Hosted app and API:** shut down on 2026-11-17 (retired project). Code and write-ups remain here.
 **Wiki:** [Architecture, methodology, strategies, and known limitations](https://github.com/Kartik-061/trading-bot/wiki)
 
 > Paper trading only. No real capital is connected. Research and educational project — not investment advice.
